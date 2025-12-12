@@ -19,33 +19,44 @@ in vec3 Normal;
 
 out vec4 FragColor;
 
+uniform int is_lit;
+
 uniform vec3 view_pos;
 
 uniform DirectionalLight directional_lights[MAX_DIR_LIGHTS];
 uniform int num_dir_lights;
 
-uniform vec3 object_color;
+uniform vec4 object_color;
 
 void main() {
-  vec3 result = vec3(0.0);
+  vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
 
-  for (int i = 0; i < num_dir_lights; i++) {
-    DirectionalLight light = directional_lights[i];
+  if (is_lit != 0) {
+    for (int i = 0; i < num_dir_lights; i++) {
+      DirectionalLight light = directional_lights[i];
 
-    vec3 ambient = light.ambient * light.color;
+      vec3 ambient = light.ambient * light.color;
 
-    vec3 norm = normalize(Normal);
-    vec3 light_dir = normalize(-light.direction);
-    float diff = max(dot(norm, light_dir), 0.0);
-    vec3 diffuse = light.diffuse * diff * light.color;
+      vec3 norm = normalize(Normal);
+      vec3 light_dir = normalize(-light.direction);
+      float diff = max(dot(norm, light_dir), 0.0);
+      vec3 diffuse = light.diffuse * diff * light.color;
 
-    vec3 view_dir = normalize(view_pos - FragPos);
-    vec3 reflect_dir = reflect(-light_dir, norm);
-    float spec = pow(max(dot(view_dir, reflect_dir), 0.0), light.intensity);
-    vec3 specular = light.specular * spec * light.color;
+      vec3 view_dir = normalize(view_pos - FragPos);
+      vec3 reflect_dir = reflect(-light_dir, norm);
+      float spec = pow(max(dot(view_dir, reflect_dir), 0.0), light.intensity);
+      vec3 specular = light.specular * spec * light.color;
 
-    result += (ambient + diffuse + specular) * object_color;
+      result += vec4(ambient + diffuse + specular, 0.0);
+    }
+
+    result *= object_color;
+  } else {
+    result = object_color;
   }
 
-  FragColor = vec4(result, 1.0);
+  if (result.a < 0.1)
+    discard;
+
+  FragColor = result;
 }

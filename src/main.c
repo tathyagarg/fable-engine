@@ -11,6 +11,11 @@
 #define WIDTH 800
 #define HEIGHT 600
 
+// TODO: Load from config file
+#define TITLE "Fable Engine"
+
+static const vec3 world_up = {0.0f, 1.0f, 0.0f};
+
 struct Entity {
   char *name;
 
@@ -50,8 +55,28 @@ struct ComponentMeshFilter {
   unsigned int vertex_count;
 };
 
+enum MaterialKind {
+  MK_LIT,
+  MK_UNLIT,
+};
+
+enum MaterialSurfaceType {
+  MST_OPAQUE,
+  MST_TRANSPARENT,
+};
+
+struct Material {
+  enum MaterialKind material_kind;
+  enum MaterialSurfaceType surface_type;
+
+  vec4 color;
+};
+
 struct ComponentMeshRenderer {
   unsigned int is_enabled;
+
+  struct Material* materials;
+  unsigned int material_count;
 };
 
 enum LightKind {
@@ -196,6 +221,17 @@ int read_file(const char* path, char** buffer) {
   return 0;
 }
 
+void update_camera_vectors(vec3 front, vec3 right, vec3 up) {
+  glm_normalize(front);
+
+  glm_cross(front, (float*)world_up, right);
+  glm_normalize(right);
+
+  glm_cross(right, front, up);
+  glm_normalize(up);
+
+}
+
 int main() {
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -210,7 +246,11 @@ int main() {
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
 #endif
 
-  GLFWwindow *window = glfwCreateWindow(WIDTH, HEIGHT, "OpenGL Window", NULL, NULL);
+  GLFWwindow *window =
+    glfwCreateWindow(
+      WIDTH, HEIGHT, TITLE,
+      NULL, NULL
+    );
 
   if (!window) {
     fprintf(stderr, "Failed to create GLFW window\n");
@@ -248,6 +288,18 @@ int main() {
   glDeleteShader(vertex_shader);
   glDeleteShader(fragment_shader);
 
+  struct Material lit = {
+    .material_kind = MK_LIT,
+    .surface_type = MST_TRANSPARENT,
+    .color = {1.0f, 1.0f, 1.0f, 0.2f},
+  };
+
+  struct Material unlit = {
+    .material_kind = MK_UNLIT,
+    .surface_type = MST_OPAQUE,
+    .color = {1.0f, 1.0f, 1.0f, 1.0f},
+  };
+
   struct Entity cube;
   cube.name = "Cube";
   cube.component_count = 3;
@@ -270,11 +322,19 @@ int main() {
       .vertex_count = 36,
     },
   };
+
+  struct Material* cube_materials = malloc(1 * sizeof(struct Material));
+  cube_materials[0] = lit;
+
+  struct ComponentMeshRenderer cube_mesh_renderer = {
+    .is_enabled = 1,
+    .materials = cube_materials,
+    .material_count = 1,
+  };
+
   cube.components[2] = (struct Component){
     .kind = CK_MESH_RENDERER,
-    .data = &(struct ComponentMeshRenderer){
-      .is_enabled = 1,
-    },
+    .data = &cube_mesh_renderer,
   };
 
   struct Entity light;
@@ -323,13 +383,7 @@ int main() {
 
   vec3 world_up = {0.0f, 1.0f, 0.0f};
 
-  glm_normalize(front);
-
-  glm_cross(front, world_up, right);
-  glm_normalize(right);
-
-  glm_cross(right, front, up);
-  glm_normalize(up);
+  update_camera_vectors(front, right, up);
 
   float camera_pos[] = {0.0f, 0.0f, 0.0f};
 
@@ -343,11 +397,7 @@ int main() {
     glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glm_normalize(front);
-    glm_cross(front, world_up, right);
-    glm_normalize(right);
-    glm_cross(right, front, up);
-    glm_normalize(up);
+    update_camera_vectors(front, right, up);
 
     glUseProgram(shader_program);
 
@@ -397,6 +447,7 @@ int main() {
     GLuint object_color_loc =
         glGetUniformLocation(shader_program, "object_color");
     GLuint view_pos_loc = glGetUniformLocation(shader_program, "view_pos");
+    GLuint is_lit_loc = glGetUniformLocation(shader_program, "is_lit");
 
     mat4 camera_world, rotation;
 
@@ -494,6 +545,11 @@ int main() {
           continue;
         }
 
+        struct Material* materials = mesh_renderer->materials;
+        if (materials == NULL || mesh_renderer->material_count == 0) {
+          continue;
+        }
+
         mat4 model_matrix;
         glm_mat4_identity(model_matrix);
         glm_translate(model_matrix, transform->position);
@@ -506,10 +562,30 @@ int main() {
         glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *)projection);
         glUniformMatrix4fv(view_loc, 1, GL_FALSE, (float *)view_matrix);
 
+        if (materials[0].surface_type == MST_TRANSPARENT) {
+          glEnable(GL_BLEND);
+          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        } else {
+          glDisable(GL_BLEND);
+        }
 
-        glUniform3f(object_color_loc, 1.0f, 1.0f, 1.0f);
+        float alpha = materials[0].surface_type == MST_TRANSPARENT
+                          ? materials[0].color[3]
+                          : 1.0f;
+
+        glUniform4f(object_color_loc,
+            materials[0].color[0],
+            materials[0].color[1],
+            materials[0].color[2],
+                    alpha
+        );
+
         glUniform3fv(view_pos_loc, 1, camera_pos);
 
+        glUniform1i(
+            is_lit_loc,
+            materials[0].material_kind == MK_LIT ? 1 : 0
+        );
 
         glBindVertexArray(mesh_filter->vao);
         glDrawArrays(GL_TRIANGLES, 0, mesh_filter->vertex_count);
