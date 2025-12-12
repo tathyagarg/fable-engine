@@ -1,6 +1,7 @@
 // clang-format off
 
 #include <stdio.h>
+#include <string.h>
 
 #include <cglm/cglm.h>
 #include <glad/glad.h>
@@ -10,52 +11,11 @@
 #define WIDTH 800
 #define HEIGHT 600
 
-static const char *vertexShaderSource =
-    "#version 330 core\n"
-    "layout(location = 0) in vec3 aPos;\n"
-    "layout(location = 1) in vec3 aNormal;\n"
-    "uniform mat4 model;\n"
-    "uniform mat4 projection;\n"
-    "uniform mat4 view;\n"
-    "out vec3 Normal;\n"
-    "out vec3 FragPos;\n"
-    "void main()\n"
-    "{\n"
-    "   FragPos = vec3(model * vec4(aPos, 1.0));\n"
-    "   Normal = mat3(transpose(inverse(model))) * aNormal;\n"
-    "   gl_Position = projection * view * vec4(FragPos, 1.0);\n"
-    "}\0";
-
-static const char *fragmentShaderSource =
-    "#version 330 core\n"
-    "in vec3 FragPos;\n"
-    "in vec3 Normal;\n"
-    "out vec4 FragColor;\n"
-    "uniform vec3 object_color;\n"
-    "uniform vec3 light_color;\n"
-    "uniform vec3 light_direction;\n"
-    "uniform vec3 view_pos;\n"
-    "void main()\n"
-    "{\n"
-    "   float ambient_strength = 0.1;\n"
-    "   vec3 ambient = ambient_strength * light_color;\n"
-    "   vec3 norm = normalize(Normal);\n"
-    "   vec3 light_dir = normalize(-light_direction);\n"
-    "   float diff = max(dot(norm, light_dir), 0.0);\n"
-    "   vec3 diffuse = diff * light_color;\n"
-    "   float specular_strength = 0.4;\n"
-    "   vec3 view_dir = normalize(view_pos - FragPos);\n"
-    "   vec3 reflect_dir = reflect(-light_dir, norm);\n"
-    "   float spec = pow(max(dot(view_dir, reflect_dir), 0.0), 32);\n"
-    "   vec3 specular = specular_strength * spec * light_color;\n"
-    "   vec3 result = (ambient + diffuse + specular) * object_color;\n"
-    "   FragColor = vec4(result, 1.0);\n"
-    "}\n\0";
-
 struct Entity {
   char *name;
 
   struct Component *components;
+  unsigned int component_count;
 };
 
 enum ComponentKind {
@@ -100,9 +60,24 @@ enum LightKind {
   LK_SPOT,
 };
 
+struct DirLightData {
+  vec3 direction;
+
+  vec3 ambient;
+  vec3 diffuse;
+  vec3 specular;
+};
+
+union LightData {
+  struct DirLightData dir_light;
+};
+
 struct ComponentLight {
   enum LightKind light_kind;
+  union LightData light_data;
+
   vec3 color;
+
   float intensity;
 };
 
@@ -110,7 +85,7 @@ struct Component* get_component_by_kind(
     struct Entity *entity,
     enum ComponentKind kind
 ) {
-  for (size_t i = 0; i < 3; i++) {
+  for (size_t i = 0; i < entity->component_count; i++) {
     if (entity->components[i].kind == kind) {
       return &entity->components[i];
     }
@@ -198,6 +173,29 @@ GLuint cube_vao() {
   return vao;
 }
 
+int read_file(const char* path, char** buffer) {
+  FILE* file = fopen(path, "r");
+  if (!file) {
+    fprintf(stderr, "Failed to open shader file: %s\n", path);
+    return 1;
+  }
+
+  fseek(file, 0, SEEK_END);
+
+  long length = ftell(file);
+  printf("Shader file %s length: %ld\n", path, length);
+
+  fseek(file, 0, SEEK_SET);
+
+  *buffer = malloc((length + 1) * sizeof(char));
+  fread(*buffer, 1, length, file);
+
+  (*buffer)[length] = '\0';
+  fclose(file);
+
+  return 0;
+}
+
 int main() {
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -223,24 +221,36 @@ int main() {
   glfwMakeContextCurrent(window);
   gladLoadGL();
 
-  GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertexShader, 1, &vertexShaderSource, NULL);
-  glCompileShader(vertexShader);
+  char* vertex_shader_source = NULL;
+  char* fragment_shader_source = NULL;
 
-  GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragmentShader, 1, &fragmentShaderSource, NULL);
-  glCompileShader(fragmentShader);
+  if (read_file("src/main.vert", &vertex_shader_source) == 1) {
+    return -1;
+  }
 
-  GLuint shaderProgram = glCreateProgram();
-  glAttachShader(shaderProgram, vertexShader);
-  glAttachShader(shaderProgram, fragmentShader);
-  glLinkProgram(shaderProgram);
+  if (read_file("src/main.frag", &fragment_shader_source) == 1) {
+    return -1;
+  }
 
-  glDeleteShader(vertexShader);
-  glDeleteShader(fragmentShader);
+  GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
+  glShaderSource(vertex_shader, 1, (const char* const*)&vertex_shader_source, NULL);
+  glCompileShader(vertex_shader);
+
+  GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(fragment_shader, 1, (const char* const*)&fragment_shader_source, NULL);
+  glCompileShader(fragment_shader);
+
+  GLuint shader_program = glCreateProgram();
+  glAttachShader(shader_program, vertex_shader);
+  glAttachShader(shader_program, fragment_shader);
+  glLinkProgram(shader_program);
+
+  glDeleteShader(vertex_shader);
+  glDeleteShader(fragment_shader);
 
   struct Entity cube;
   cube.name = "Cube";
+  cube.component_count = 3;
 
   cube.components = malloc(3 * sizeof(struct Component));
 
@@ -269,6 +279,8 @@ int main() {
 
   struct Entity light;
   light.name = "Light";
+  light.component_count = 2;
+
   light.components = malloc(2 * sizeof(struct Component));
   light.components[0] = (struct Component){
     .kind = CK_TRANSFORM,
@@ -283,8 +295,14 @@ int main() {
     .kind = CK_LIGHT,
     .data = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
+      .light_data.dir_light = {
+        .direction = {-0.2f, -1.0f, -0.3f},
+        .ambient = {0.2f, 0.2f, 0.2f},
+        .diffuse = {0.5f, 0.5f, 0.5f},
+        .specular = {1.0f, 1.0f, 1.0f},
+      },
       .color = {1.0f, 1.0f, 1.0f},
-      .intensity = 1.0f,
+      .intensity = 32.0f,
     },
   };
 
@@ -331,7 +349,7 @@ int main() {
     glm_cross(right, front, up);
     glm_normalize(up);
 
-    glUseProgram(shaderProgram);
+    glUseProgram(shader_program);
 
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, 1);
@@ -372,23 +390,23 @@ int main() {
       glm_vec3_add(camera_pos, translation, camera_pos);
     }
 
-    GLuint model_loc = glGetUniformLocation(shaderProgram, "model");
-    GLuint proj_loc = glGetUniformLocation(shaderProgram, "projection");
-    GLuint view_loc = glGetUniformLocation(shaderProgram, "view");
+    GLuint model_loc = glGetUniformLocation(shader_program, "model");
+    GLuint proj_loc = glGetUniformLocation(shader_program, "projection");
+    GLuint view_loc = glGetUniformLocation(shader_program, "view");
 
     GLuint object_color_loc =
-        glGetUniformLocation(shaderProgram, "object_color");
-    GLuint light_color_loc = glGetUniformLocation(shaderProgram, "light_color");
-    GLuint light_direction_loc = glGetUniformLocation(shaderProgram, "light_direction");
-    GLuint view_pos_loc = glGetUniformLocation(shaderProgram, "view_pos");
+        glGetUniformLocation(shader_program, "object_color");
+    GLuint view_pos_loc = glGetUniformLocation(shader_program, "view_pos");
 
     mat4 camera_world, rotation;
 
     vec3 target;
     glm_vec3_add(camera_pos, front, target);
-    glm_look(camera_pos, target, up, view_matrix);
+    glm_lookat(camera_pos, target, up, view_matrix);
 
     // lights
+    int light_count = 0;
+
     for (size_t i = 0; i < entity_count; i++) {
       struct Entity entity = entities[i];
 
@@ -397,9 +415,55 @@ int main() {
         struct ComponentLight *light_comp =
             (struct ComponentLight *)light->data;
 
+        if (light_comp->light_kind == LK_DIRECTIONAL) {
+          struct DirLightData dir_light_data = light_comp->light_data.dir_light;
 
+          char buffer[100];
+          sprintf(buffer, "directional_lights[%d].color", light_count);
+
+          GLuint light_color_loc =
+              glGetUniformLocation(shader_program, buffer);
+
+          memset(buffer, 0, sizeof(buffer));
+          sprintf(buffer, "directional_lights[%d].direction", light_count);
+          GLuint light_direction_loc =
+              glGetUniformLocation(shader_program, buffer);
+
+          memset(buffer, 0, sizeof(buffer));
+          sprintf(buffer, "directional_lights[%d].ambient", light_count);
+          GLuint light_ambient_loc =
+              glGetUniformLocation(shader_program, buffer);
+
+          memset(buffer, 0, sizeof(buffer));
+          sprintf(buffer, "directional_lights[%d].diffuse", light_count);
+          GLuint light_diffuse_loc =
+              glGetUniformLocation(shader_program, buffer);
+
+          memset(buffer, 0, sizeof(buffer));
+          sprintf(buffer, "directional_lights[%d].specular", light_count);
+          GLuint light_specular_loc =
+              glGetUniformLocation(shader_program, buffer);
+
+          memset(buffer, 0, sizeof(buffer));
+          sprintf(buffer, "directional_lights[%d].intensity", light_count);
+          GLuint light_intensity_loc =
+              glGetUniformLocation(shader_program, buffer);
+
+          glUniform3fv(light_ambient_loc, 1, dir_light_data.ambient);
+          glUniform3fv(light_diffuse_loc, 1, dir_light_data.diffuse);
+          glUniform3fv(light_specular_loc, 1, dir_light_data.specular);
+          glUniform3fv(light_color_loc, 1, light_comp->color);
+          glUniform3fv(light_direction_loc, 1, dir_light_data.direction);
+          glUniform1f(light_intensity_loc, light_comp->intensity);
+
+          light_count++;
+        }
       }
     }
+
+    GLuint num_dir_lights_loc =
+        glGetUniformLocation(shader_program, "num_dir_lights");
+    glUniform1i(num_dir_lights_loc, light_count);
 
     for (size_t i = 0; i < entity_count; i++) {
       struct Entity entity = entities[i];
@@ -444,8 +508,6 @@ int main() {
 
 
         glUniform3f(object_color_loc, 1.0f, 1.0f, 1.0f);
-        glUniform3f(light_color_loc, 1.0f, 1.0f, 1.0f);
-        glUniform3f(light_direction_loc, 0.0f, 0.0f, -1.0f);
         glUniform3fv(view_pos_loc, 1, camera_pos);
 
 
