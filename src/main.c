@@ -70,10 +70,13 @@ struct Material {
   enum MaterialSurfaceType surface_type;
 
   vec4 color;
+
+  GLboolean is_alpha_clipping;
+  float alpha_clip_threshold;
 };
 
 struct ComponentMeshRenderer {
-  unsigned int is_enabled;
+  GLboolean is_enabled;
 
   struct Material* materials;
   unsigned int material_count;
@@ -120,47 +123,53 @@ struct Component* get_component_by_kind(
 }
 
 static const float CUBE_VERTICES[] = {
-  -0.5f, -0.5f, -0.5f, 0.0f,  0.0f,  -1.0f,
-  0.5f,  -0.5f, -0.5f, 0.0f,  0.0f,  -1.0f,
-  0.5f,  0.5f,  -0.5f, 0.0f,  0.0f,  -1.0f,
-  0.5f,  0.5f,  -0.5f, 0.0f,  0.0f,  -1.0f,
-  -0.5f, 0.5f,  -0.5f, 0.0f,  0.0f,  -1.0f,
-  -0.5f, -0.5f, -0.5f, 0.0f,  0.0f,  -1.0f,
+  // back face (−Z)  CCW
+  0.5f, -0.5f, -0.5f,  0, 0,-1,
+  -0.5f, -0.5f, -0.5f,  0, 0,-1,
+  -0.5f,  0.5f, -0.5f,  0, 0,-1,
+  0.5f, -0.5f, -0.5f,  0, 0,-1,
+  -0.5f,  0.5f, -0.5f,  0, 0,-1,
+  0.5f,  0.5f, -0.5f,  0, 0,-1,
 
-  -0.5f, -0.5f, 0.5f,  0.0f,  0.0f,  1.0f,
-  0.5f,  -0.5f, 0.5f, 0.0f,  0.0f,  1.0f,
-  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,
-  0.5f,  0.5f,  0.5f,  0.0f,  0.0f,  1.0f,
-  -0.5f, 0.5f,  0.5f, 0.0f,  0.0f,  1.0f,
-  -0.5f, -0.5f, 0.5f,  0.0f,  0.0f,  1.0f,
+  // front face (+Z) CCW
+  -0.5f, -0.5f,  0.5f,  0, 0, 1,
+  0.5f, -0.5f,  0.5f,  0, 0, 1,
+  0.5f,  0.5f,  0.5f,  0, 0, 1,
+  -0.5f, -0.5f,  0.5f,  0, 0, 1,
+  0.5f,  0.5f,  0.5f,  0, 0, 1,
+  -0.5f,  0.5f,  0.5f,  0, 0, 1,
 
-  -0.5f, 0.5f,  0.5f,  -1.0f, 0.0f,  0.0f,
-  -0.5f, 0.5f,  -0.5f, -1.0f, 0.0f,  0.0f,
-  -0.5f, -0.5f, -0.5f, -1.0f, 0.0f,  0.0f,
-  -0.5f, -0.5f, -0.5f, -1.0f, 0.0f,  0.0f,
-  -0.5f, -0.5f, 0.5f, -1.0f, 0.0f,  0.0f,
-  -0.5f, 0.5f,  0.5f,  -1.0f, 0.0f,  0.0f,
+  // left face (−X) CCW
+  -0.5f, -0.5f, -0.5f, -1, 0, 0,
+  -0.5f, -0.5f,  0.5f, -1, 0, 0,
+  -0.5f,  0.5f,  0.5f, -1, 0, 0,
+  -0.5f, -0.5f, -0.5f, -1, 0, 0,
+  -0.5f,  0.5f,  0.5f, -1, 0, 0,
+  -0.5f,  0.5f, -0.5f, -1, 0, 0,
 
-  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,
-  0.5f,  0.5f,  -0.5f, 1.0f,  0.0f,  0.0f,
-  0.5f,  -0.5f, -0.5f, 1.0f,  0.0f,  0.0f,
-  0.5f,  -0.5f, -0.5f, 1.0f,  0.0f,  0.0f,
-  0.5f,  -0.5f, 0.5f, 1.0f,  0.0f,  0.0f,
-  0.5f,  0.5f,  0.5f,  1.0f,  0.0f,  0.0f,
+  // right face (+X) CCW
+  0.5f, -0.5f, -0.5f,  1, 0, 0,
+  0.5f,  0.5f,  0.5f,  1, 0, 0,
+  0.5f, -0.5f,  0.5f,  1, 0, 0,
+  0.5f, -0.5f, -0.5f,  1, 0, 0,
+  0.5f,  0.5f, -0.5f,  1, 0, 0,
+  0.5f,  0.5f,  0.5f,  1, 0, 0,
 
-  -0.5f, -0.5f, -0.5f, 0.0f,  -1.0f, 0.0f,
-  0.5f,  -0.5f, -0.5f, 0.0f,  -1.0f, 0.0f,
-  0.5f,  -0.5f, 0.5f,  0.0f,  -1.0f, 0.0f,
-  0.5f,  -0.5f, 0.5f,  0.0f,  -1.0f, 0.0f,
-  -0.5f, -0.5f, 0.5f,  0.0f,  -1.0f, 0.0f,
-  -0.5f, -0.5f, -0.5f, 0.0f,  -1.0f, 0.0f,
+  // bottom face (−Y) CCW
+  -0.5f, -0.5f, -0.5f,  0,-1, 0,
+  0.5f, -0.5f, -0.5f,  0,-1, 0,
+  0.5f, -0.5f,  0.5f,  0,-1, 0,
+  -0.5f, -0.5f, -0.5f,  0,-1, 0,
+  0.5f, -0.5f,  0.5f,  0,-1, 0,
+  -0.5f, -0.5f,  0.5f,  0,-1, 0,
 
-  -0.5f, 0.5f,  -0.5f, 0.0f,  1.0f,  0.0f,
-  0.5f,  0.5f,  -0.5f, 0.0f,  1.0f,  0.0f,
-  0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,
-  0.5f,  0.5f,  0.5f,  0.0f,  1.0f,  0.0f,
-  -0.5f, 0.5f,  0.5f, 0.0f,  1.0f,  0.0f,
-  -0.5f, 0.5f,  -0.5f, 0.0f,  1.0f,  0.0f
+  // top face (+Y) CCW
+  -0.5f,  0.5f, -0.5f,  0, 1, 0,
+  -0.5f,  0.5f,  0.5f,  0, 1, 0,
+  0.5f,  0.5f,  0.5f,  0, 1, 0,
+  -0.5f,  0.5f, -0.5f,  0, 1, 0,
+  0.5f,  0.5f,  0.5f,  0, 1, 0,
+  0.5f,  0.5f, -0.5f,  0, 1, 0,
 };
 
 GLuint cube_vao() {
@@ -208,7 +217,6 @@ int read_file(const char* path, char** buffer) {
   fseek(file, 0, SEEK_END);
 
   long length = ftell(file);
-  printf("Shader file %s length: %ld\n", path, length);
 
   fseek(file, 0, SEEK_SET);
 
@@ -230,6 +238,40 @@ void update_camera_vectors(vec3 front, vec3 right, vec3 up) {
   glm_cross(right, front, up);
   glm_normalize(up);
 
+}
+
+void rgba_to_vec4(int r, int g, int b, int a, vec4* out_color) {
+  (*out_color)[0] = r / 255.0f;
+  (*out_color)[1] = g / 255.0f;
+  (*out_color)[2] = b / 255.0f;
+  (*out_color)[3] = a / 255.0f;
+}
+
+/*
+ * Alpha calculation with clipping
+ * +---------+-----------+-----------------+-----------------+
+ * | Opaque? | Clipping? | Alpha > Thresh? | Resulting Alpha |
+ * +---------+-----------+-----------------+-----------------+
+ * |   Yes   |    Yes    |       Yes       |      1.0f       |
+ * |   Yes   |    Yes    |       No        |      0.0f       |
+ * |   Yes   |    No     |       N/A       |      1.0f       |
+ * |   No    |    Yes    |       Yes       |     Alpha       |
+ * |   No    |    Yes    |       No        |      0.0f       |
+ * |   No    |    No     |       N/A       |     Alpha       |
+ * +---------+-----------+-----------------+-----------------+
+ * */
+float calculate_alpha(struct Material material) {
+  if (!material.is_alpha_clipping || (
+      material.is_alpha_clipping &&
+      material.color[3] > material.alpha_clip_threshold)) {
+    if (material.surface_type == MST_OPAQUE) {
+      return 1.0f;
+    } else {
+      return material.color[3];
+    }
+  } else {
+    return 0.0f;
+  }
 }
 
 int main() {
@@ -291,13 +333,21 @@ int main() {
   struct Material lit = {
     .material_kind = MK_LIT,
     .surface_type = MST_TRANSPARENT,
-    .color = {1.0f, 1.0f, 1.0f, 0.2f},
+    .is_alpha_clipping = GL_FALSE,
   };
+  rgba_to_vec4(0, 0, 255, 50, &lit.color);
+
+  struct Material lit2 = {
+    .material_kind = MK_LIT,
+    .surface_type = MST_TRANSPARENT,
+    .is_alpha_clipping = GL_FALSE,
+  };
+  rgba_to_vec4(255, 0, 0, 50, &lit2.color);
 
   struct Material unlit = {
     .material_kind = MK_UNLIT,
-    .surface_type = MST_OPAQUE,
-    .color = {1.0f, 1.0f, 1.0f, 1.0f},
+    .surface_type = MST_TRANSPARENT,
+    .color = {1.0f, 1.0f, 1.0f, 0.2f},
   };
 
   struct Entity cube;
@@ -327,7 +377,7 @@ int main() {
   cube_materials[0] = lit;
 
   struct ComponentMeshRenderer cube_mesh_renderer = {
-    .is_enabled = 1,
+    .is_enabled = GL_TRUE,
     .materials = cube_materials,
     .material_count = 1,
   };
@@ -379,17 +429,17 @@ int main() {
   glm_perspective(glm_rad(45.0f), aspect, near, far, projection);
 
   vec3 front = {0.0f, 0.0f, -1.0f};
-  vec3 right, up;
+  vec3 right, up, target;
 
   vec3 world_up = {0.0f, 1.0f, 0.0f};
 
   update_camera_vectors(front, right, up);
 
-  float camera_pos[] = {0.0f, 0.0f, 0.0f};
+  float camera_pos[] = {0.0f, 0.0f, 3.0f};
 
-  glm_look(camera_pos, front, up, view_matrix);
+  glm_vec3_add(camera_pos, front, target);
 
-  float angle = 0.02f;
+  glm_look(camera_pos, target, up, view_matrix);
 
   glEnable(GL_DEPTH_TEST);
 
@@ -451,7 +501,6 @@ int main() {
 
     mat4 camera_world, rotation;
 
-    vec3 target;
     glm_vec3_add(camera_pos, front, target);
     glm_lookat(camera_pos, target, up, view_matrix);
 
@@ -562,33 +611,44 @@ int main() {
         glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *)projection);
         glUniformMatrix4fv(view_loc, 1, GL_FALSE, (float *)view_matrix);
 
-        if (materials[0].surface_type == MST_TRANSPARENT) {
-          glEnable(GL_BLEND);
-          glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        } else {
-          glDisable(GL_BLEND);
+        for (int i = 0; i < mesh_renderer->material_count; i++) {
+          struct Material material = materials[i];
+
+          if (material.surface_type == MST_TRANSPARENT) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+            glDisable(GL_CULL_FACE);
+
+            glDepthMask(GL_FALSE);
+
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+
+            glFrontFace(GL_CCW);
+          } else {
+            glDisable(GL_BLEND);
+            glDisable(GL_CULL_FACE);
+
+            glDepthMask(GL_TRUE);
+          }
+
+          glUniform4f(object_color_loc,
+              material.color[0],
+              material.color[1],
+              material.color[2],
+              calculate_alpha(material)
+          );
+
+          glUniform3fv(view_pos_loc, 1, camera_pos);
+
+          glUniform1i(
+              is_lit_loc,
+              material.material_kind == MK_LIT
+          );
+
+          glBindVertexArray(mesh_filter->vao);
+          glDrawArrays(GL_TRIANGLES, 0, mesh_filter->vertex_count);
         }
-
-        float alpha = materials[0].surface_type == MST_TRANSPARENT
-                          ? materials[0].color[3]
-                          : 1.0f;
-
-        glUniform4f(object_color_loc,
-            materials[0].color[0],
-            materials[0].color[1],
-            materials[0].color[2],
-                    alpha
-        );
-
-        glUniform3fv(view_pos_loc, 1, camera_pos);
-
-        glUniform1i(
-            is_lit_loc,
-            materials[0].material_kind == MK_LIT ? 1 : 0
-        );
-
-        glBindVertexArray(mesh_filter->vao);
-        glDrawArrays(GL_TRIANGLES, 0, mesh_filter->vertex_count);
       }
     }
 
