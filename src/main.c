@@ -11,6 +11,10 @@
 #define WIDTH 800
 #define HEIGHT 600
 
+#define PERSP_FOV glm_rad(45.0f)
+#define PERSP_NEAR 0.1f
+#define PERSP_FAR 100.0f
+
 //  TODO: Load from config file
 #define TITLE "Fable Engine"
 
@@ -312,6 +316,23 @@ void add_component(
   entity->components[entity->component_count++] = component;
 }
 
+
+void framebuffer_size_callback(
+    GLFWwindow* window,
+    int width,
+    int height
+) {
+  glad_glViewport(0, 0, width, height);
+
+  mat4* projection =
+    (mat4 *)glfwGetWindowUserPointer(window);
+
+  float aspect = (float)width / (float)height;
+
+  glm_perspective(PERSP_FOV, aspect,
+    PERSP_NEAR, PERSP_FAR, *projection);
+}
+
 int main() {
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -376,7 +397,7 @@ int main() {
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
   };
-  rgba_to_vec4(255, 0, 0, 200, &lit.color);
+  rgba_to_vec4(255, 0, 0, 100, &lit.color);
 
   struct Material unlit = {
     .material_kind = MK_UNLIT,
@@ -386,6 +407,9 @@ int main() {
 
   struct Entity cube = empty_entity();
   cube.name = "Cube";
+
+  struct Material* cube_materials = malloc(1 * sizeof(struct Material));
+  cube_materials[0] = lit;
 
   add_component(&cube, (struct Component){
     .kind = CK_TRANSFORM,
@@ -405,9 +429,6 @@ int main() {
     },
   });
 
-  struct Material* cube_materials = malloc(1 * sizeof(struct Material));
-  cube_materials[0] = lit;
-
   add_component(&cube, (struct Component){
     .kind = CK_MESH_RENDERER,
     .data = &(struct ComponentMeshRenderer){
@@ -417,34 +438,31 @@ int main() {
     },
   });
 
-  struct Entity light;
+  struct Entity light = empty_entity();
   light.name = "Light";
-  light.component_count = 2;
-
-  light.components = malloc(2 * sizeof(struct Component));
-  light.components[0] = (struct Component){
+  add_component(&light, (struct Component){
     .kind = CK_TRANSFORM,
     .data = &(struct ComponentTransform){
       .position = {0.0f, 100.0f, -50.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
-  };
+  });
 
-  light.components[1] = (struct Component){
+  add_component(&light, (struct Component){
     .kind = CK_LIGHT,
     .data = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
       .light_data.dir_light = {
-        .direction = {0.4f, -0.3f, -0.5f},
-        .ambient = {0.05f, 0.05f, 0.05f},
-        .diffuse = {0.8f, 0.8f, 0.8f},
-        .specular = {0.3f, 0.3f, 0.3f},
+        .direction = {-0.4f, -0.3f, -0.5f},
+        .ambient = {0.02f, 0.02f, 0.02f},
+        .diffuse = {0.5f, 0.5f, 0.5f},
+        .specular = {1.0f, 1.0f, 1.0f},
       },
       .color = {1.0f, 1.0f, 1.0f},
       .intensity = 64.0f,
     },
-  };
+  });
 
   struct Entity entities[] = {cube, light};
   size_t entity_count = sizeof(entities) / sizeof(entities[0]);
@@ -456,33 +474,30 @@ int main() {
   mat4 view_matrix;
   mat4 projection;
 
-  glm_perspective(glm_rad(45.0f), aspect,
-    near, far, projection);
+  glm_perspective(PERSP_FOV, aspect,
+    PERSP_NEAR, PERSP_FAR, projection);
 
   vec3 front = {0.0f, 0.0f, -1.0f};
   vec3 right, up, target;
 
-  vec3 world_up = {0.0f, 1.0f, 0.0f};
-
-  update_camera_vectors(front, right, up);
-
   float camera_pos[] = {-1.0f, 1.0f, 5.0f};
 
+  update_camera_vectors(front, right, up);
   glm_vec3_add(camera_pos, front, target);
   glm_look(camera_pos, target, up, view_matrix);
 
   glEnable(GL_DEPTH_TEST);
-  glEnable(GL_FRAMEBUFFER_SRGB);
+
+  glfwSetWindowUserPointer(window, &projection);
+  glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
   while (!glfwWindowShouldClose(window)) {
     glClearColor(0.4f, 0.388f, 0.376f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     update_camera_vectors(front, right, up);
-
     glm_vec3_add(camera_pos, front, target);
     glm_lookat(camera_pos, target, up, view_matrix);
-
 
     glUseProgram(shader_program);
 
@@ -598,6 +613,12 @@ int main() {
           glUniform3fv(light_direction_loc, 1,
             dir_light_data.direction);
           glUniform1f(light_intensity_loc, light_comp->intensity);
+
+          // vec3 *specular = &((struct ComponentLight *)light->data)
+          //     ->light_data.dir_light.specular;
+          // float s = (float)(sin(glfwGetTime())) * 0.5f + 0.5f;
+
+          // glm_vec3_adds(*specular, s, *specular);
 
           light_count++;
         }

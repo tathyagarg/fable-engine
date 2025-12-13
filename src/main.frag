@@ -1,8 +1,8 @@
 #version 330 core
 
 #define MAX_DIR_LIGHTS 4
-
 #define MINIMUM_A_THRESHOLD 0.01
+#define GAMMA 2.2
 
 struct DirectionalLight {
   vec3 direction;
@@ -31,7 +31,8 @@ uniform int num_dir_lights;
 uniform vec4 object_color;
 
 void main() {
-  vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
+  vec4 result = vec4(0.0);
+  result.a = 1.0;
 
   if (is_lit != 0) {
     for (int i = 0; i < num_dir_lights; i++) {
@@ -39,12 +40,11 @@ void main() {
 
       vec3 norm = normalize(Normal);
       vec3 light_dir = normalize(-light.direction);
-      vec3 anti_light_dir = normalize(light.direction);
 
-      float diff = max(dot(norm, light_dir), 0.0);
-      float antidiff = max(dot(norm, anti_light_dir), 0.0);
+      float diff = dot(norm, light_dir);
+      diff = diff * 0.5 + 0.5;
 
-      vec3 ambient = light.ambient * light.color * antidiff;
+      vec3 ambient = light.ambient * light.color;
 
       vec3 diffuse = diff * light.diffuse * light.color;
 
@@ -63,6 +63,6 @@ void main() {
   if (result.a < MINIMUM_A_THRESHOLD)
     discard;
 
-  result.rgb = pow(result.rgb, vec3(1.0 / 2.2));
+  result.rgb = pow(result.rgb, vec3(1.0 / GAMMA));
   FragColor = result;
 }
