@@ -11,16 +11,17 @@
 #define WIDTH 800
 #define HEIGHT 600
 
-// TODO: Load from config file
+//  TODO: Load from config file
 #define TITLE "Fable Engine"
 
-static const vec3 world_up = {0.0f, 1.0f, 0.0f};
+static const vec3 WORLD_UP = {0.0f, 1.0f, 0.0f};
 
 struct Entity {
   char *name;
 
   struct Component *components;
   unsigned int component_count;
+  unsigned int reserved_components;
 };
 
 enum ComponentKind {
@@ -65,9 +66,16 @@ enum MaterialSurfaceType {
   MST_TRANSPARENT,
 };
 
+enum MaterialRenderFace {
+  MRF_FRONT,
+  MRF_BACK,
+  MRF_DOUBLE,
+};
+
 struct Material {
   enum MaterialKind material_kind;
   enum MaterialSurfaceType surface_type;
+  enum MaterialRenderFace render_face;
 
   vec4 color;
 
@@ -78,7 +86,7 @@ struct Material {
 struct ComponentMeshRenderer {
   GLboolean is_enabled;
 
-  struct Material* materials;
+  struct Material** materials;
   unsigned int material_count;
 };
 
@@ -232,7 +240,7 @@ int read_file(const char* path, char** buffer) {
 void update_camera_vectors(vec3 front, vec3 right, vec3 up) {
   glm_normalize(front);
 
-  glm_cross(front, (float*)world_up, right);
+  glm_cross(front, (float*)WORLD_UP, right);
   glm_normalize(right);
 
   glm_cross(right, front, up);
@@ -272,6 +280,36 @@ float calculate_alpha(struct Material material) {
   } else {
     return 0.0f;
   }
+}
+
+struct Entity empty_entity() {
+  struct Entity entity;
+  entity.name = "Empty";
+  entity.component_count = 0;
+  entity.reserved_components = 0;
+  entity.components = NULL;
+
+  return entity;
+}
+
+void add_component(
+    struct Entity* entity,
+    struct Component component
+) {
+  if (entity->reserved_components == 0) {
+    entity->reserved_components = 4;
+    entity->components = malloc(
+      entity->reserved_components * sizeof(struct Component)
+    );
+  } else if (entity->component_count >= entity->reserved_components) {
+    entity->reserved_components *= 2;
+    entity->components = realloc(
+      entity->components,
+      entity->reserved_components * sizeof(struct Component)
+    );
+  }
+
+  entity->components[entity->component_count++] = component;
 }
 
 int main() {
@@ -315,11 +353,13 @@ int main() {
   }
 
   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertex_shader, 1, (const char* const*)&vertex_shader_source, NULL);
+  glShaderSource(vertex_shader, 1,
+    (const char* const*)&vertex_shader_source, NULL);
   glCompileShader(vertex_shader);
 
   GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragment_shader, 1, (const char* const*)&fragment_shader_source, NULL);
+  glShaderSource(fragment_shader, 1,
+    (const char* const*)&fragment_shader_source, NULL);
   glCompileShader(fragment_shader);
 
   GLuint shader_program = glCreateProgram();
@@ -333,16 +373,10 @@ int main() {
   struct Material lit = {
     .material_kind = MK_LIT,
     .surface_type = MST_TRANSPARENT,
+    .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
   };
-  rgba_to_vec4(0, 0, 255, 50, &lit.color);
-
-  struct Material lit2 = {
-    .material_kind = MK_LIT,
-    .surface_type = MST_TRANSPARENT,
-    .is_alpha_clipping = GL_FALSE,
-  };
-  rgba_to_vec4(255, 0, 0, 50, &lit2.color);
+  rgba_to_vec4(255, 0, 0, 200, &lit.color);
 
   struct Material unlit = {
     .material_kind = MK_UNLIT,
@@ -350,42 +384,38 @@ int main() {
     .color = {1.0f, 1.0f, 1.0f, 0.2f},
   };
 
-  struct Entity cube;
+  struct Entity cube = empty_entity();
   cube.name = "Cube";
-  cube.component_count = 3;
 
-  cube.components = malloc(3 * sizeof(struct Component));
-
-  cube.components[0] = (struct Component){
+  add_component(&cube, (struct Component){
     .kind = CK_TRANSFORM,
     .data = &(struct ComponentTransform){
-      .position = {0.0f, 0.0f, -10.0f},
+      .position = {0.0f, 0.0f, 0.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
-  };
-  cube.components[1] = (struct Component){
+  });
+
+  add_component(&cube, (struct Component){
     .kind = CK_MESH_FILTER,
     .data = &(struct ComponentMeshFilter){
       .mesh_kind = MFK_CUBE,
       .vao = cube_vao(),
       .vertex_count = 36,
     },
-  };
+  });
 
   struct Material* cube_materials = malloc(1 * sizeof(struct Material));
   cube_materials[0] = lit;
 
-  struct ComponentMeshRenderer cube_mesh_renderer = {
-    .is_enabled = GL_TRUE,
-    .materials = cube_materials,
-    .material_count = 1,
-  };
-
-  cube.components[2] = (struct Component){
+  add_component(&cube, (struct Component){
     .kind = CK_MESH_RENDERER,
-    .data = &cube_mesh_renderer,
-  };
+    .data = &(struct ComponentMeshRenderer){
+      .is_enabled = GL_TRUE,
+      .materials = &cube_materials,
+      .material_count = 1,
+    },
+  });
 
   struct Entity light;
   light.name = "Light";
@@ -406,13 +436,13 @@ int main() {
     .data = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
       .light_data.dir_light = {
-        .direction = {-0.2f, -1.0f, -0.3f},
-        .ambient = {0.2f, 0.2f, 0.2f},
-        .diffuse = {0.5f, 0.5f, 0.5f},
-        .specular = {1.0f, 1.0f, 1.0f},
+        .direction = {0.4f, -0.3f, -0.5f},
+        .ambient = {0.05f, 0.05f, 0.05f},
+        .diffuse = {0.8f, 0.8f, 0.8f},
+        .specular = {0.3f, 0.3f, 0.3f},
       },
       .color = {1.0f, 1.0f, 1.0f},
-      .intensity = 32.0f,
+      .intensity = 64.0f,
     },
   };
 
@@ -426,7 +456,8 @@ int main() {
   mat4 view_matrix;
   mat4 projection;
 
-  glm_perspective(glm_rad(45.0f), aspect, near, far, projection);
+  glm_perspective(glm_rad(45.0f), aspect,
+    near, far, projection);
 
   vec3 front = {0.0f, 0.0f, -1.0f};
   vec3 right, up, target;
@@ -435,19 +466,23 @@ int main() {
 
   update_camera_vectors(front, right, up);
 
-  float camera_pos[] = {0.0f, 0.0f, 3.0f};
+  float camera_pos[] = {-1.0f, 1.0f, 5.0f};
 
   glm_vec3_add(camera_pos, front, target);
-
   glm_look(camera_pos, target, up, view_matrix);
 
   glEnable(GL_DEPTH_TEST);
+  glEnable(GL_FRAMEBUFFER_SRGB);
 
   while (!glfwWindowShouldClose(window)) {
-    glClearColor(0.2f, 0.3f, 0.3f, 1.0f);
+    glClearColor(0.4f, 0.388f, 0.376f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     update_camera_vectors(front, right, up);
+
+    glm_vec3_add(camera_pos, front, target);
+    glm_lookat(camera_pos, target, up, view_matrix);
+
 
     glUseProgram(shader_program);
 
@@ -490,28 +525,31 @@ int main() {
       glm_vec3_add(camera_pos, translation, camera_pos);
     }
 
-    GLuint model_loc = glGetUniformLocation(shader_program, "model");
-    GLuint proj_loc = glGetUniformLocation(shader_program, "projection");
-    GLuint view_loc = glGetUniformLocation(shader_program, "view");
+    GLuint model_loc =
+      glGetUniformLocation(shader_program, "model");
+    GLuint proj_loc =
+      glGetUniformLocation(shader_program, "projection");
+    GLuint view_loc =
+      glGetUniformLocation(shader_program, "view");
 
     GLuint object_color_loc =
         glGetUniformLocation(shader_program, "object_color");
-    GLuint view_pos_loc = glGetUniformLocation(shader_program, "view_pos");
-    GLuint is_lit_loc = glGetUniformLocation(shader_program, "is_lit");
 
-    mat4 camera_world, rotation;
+    GLuint view_pos_loc =
+      glGetUniformLocation(shader_program, "view_pos");
 
-    glm_vec3_add(camera_pos, front, target);
-    glm_lookat(camera_pos, target, up, view_matrix);
+    GLuint is_lit_loc =
+      glGetUniformLocation(shader_program, "is_lit");
 
-    // lights
     int light_count = 0;
 
     for (size_t i = 0; i < entity_count; i++) {
       struct Entity entity = entities[i];
 
       struct Component *light = NULL;
-      if ((light = get_component_by_kind(&entity, CK_LIGHT)) != NULL) {
+      if ((
+        light = get_component_by_kind(&entity, CK_LIGHT)
+      ) != NULL) {
         struct ComponentLight *light_comp =
             (struct ComponentLight *)light->data;
 
@@ -549,11 +587,16 @@ int main() {
           GLuint light_intensity_loc =
               glGetUniformLocation(shader_program, buffer);
 
-          glUniform3fv(light_ambient_loc, 1, dir_light_data.ambient);
-          glUniform3fv(light_diffuse_loc, 1, dir_light_data.diffuse);
-          glUniform3fv(light_specular_loc, 1, dir_light_data.specular);
-          glUniform3fv(light_color_loc, 1, light_comp->color);
-          glUniform3fv(light_direction_loc, 1, dir_light_data.direction);
+          glUniform3fv(light_ambient_loc, 1,
+            dir_light_data.ambient);
+          glUniform3fv(light_diffuse_loc, 1,
+            dir_light_data.diffuse);
+          glUniform3fv(light_specular_loc, 1,
+            dir_light_data.specular);
+          glUniform3fv(light_color_loc, 1,
+            light_comp->color);
+          glUniform3fv(light_direction_loc, 1,
+            dir_light_data.direction);
           glUniform1f(light_intensity_loc, light_comp->intensity);
 
           light_count++;
@@ -568,11 +611,12 @@ int main() {
     for (size_t i = 0; i < entity_count; i++) {
       struct Entity entity = entities[i];
 
-      struct Component *renderer = NULL;
-      if ((renderer = get_component_by_kind(&entity, CK_MESH_RENDERER))
-              != NULL) {
+      struct Component *mesh_r = NULL;
+      if ((
+        mesh_r = get_component_by_kind(&entity, CK_MESH_RENDERER)
+      ) != NULL) {
         struct ComponentMeshRenderer *mesh_renderer =
-            (struct ComponentMeshRenderer *)renderer->data;
+            (struct ComponentMeshRenderer *)mesh_r->data;
 
         if (!mesh_renderer->is_enabled) {
           continue;
@@ -594,22 +638,25 @@ int main() {
           continue;
         }
 
-        struct Material* materials = mesh_renderer->materials;
+        struct Material* materials = *mesh_renderer->materials;
         if (materials == NULL || mesh_renderer->material_count == 0) {
           continue;
         }
 
-        mat4 model_matrix;
-        glm_mat4_identity(model_matrix);
-        glm_translate(model_matrix, transform->position);
-        glm_rotate_x(model_matrix, transform->rotation[0], model_matrix);
-        glm_rotate_y(model_matrix, transform->rotation[1], model_matrix);
-        glm_rotate_z(model_matrix, transform->rotation[2], model_matrix);
-        glm_scale(model_matrix, transform->scale);
+        mat4 model;
+        glm_mat4_identity(model);
+        glm_translate(model, transform->position);
+        glm_rotate_x(model, transform->rotation[0], model);
+        glm_rotate_y(model, transform->rotation[1], model);
+        glm_rotate_z(model, transform->rotation[2], model);
+        glm_scale(model, transform->scale);
 
-        glUniformMatrix4fv(model_loc, 1, GL_FALSE, (float *)model_matrix);
-        glUniformMatrix4fv(proj_loc, 1, GL_FALSE, (float *)projection);
-        glUniformMatrix4fv(view_loc, 1, GL_FALSE, (float *)view_matrix);
+        glUniformMatrix4fv(model_loc, 1,
+          GL_FALSE, (float *)model);
+        glUniformMatrix4fv(proj_loc, 1,
+          GL_FALSE, (float *)projection);
+        glUniformMatrix4fv(view_loc, 1,
+          GL_FALSE, (float *)view_matrix);
 
         for (int i = 0; i < mesh_renderer->material_count; i++) {
           struct Material material = materials[i];
@@ -617,14 +664,24 @@ int main() {
           if (material.surface_type == MST_TRANSPARENT) {
             glEnable(GL_BLEND);
             glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glDisable(GL_CULL_FACE);
 
-            glDepthMask(GL_FALSE);
+            switch (material.render_face) {
+              case MRF_FRONT:
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
 
-            glEnable(GL_CULL_FACE);
-            glCullFace(GL_BACK);
+                glDepthMask(GL_FALSE);
+                break;
+              case MRF_BACK:
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_FRONT);
 
-            glFrontFace(GL_CCW);
+                glDepthMask(GL_FALSE);
+                break;
+              case MRF_DOUBLE:
+                glDisable(GL_CULL_FACE);
+                break;
+            }
           } else {
             glDisable(GL_BLEND);
             glDisable(GL_CULL_FACE);
@@ -647,7 +704,8 @@ int main() {
           );
 
           glBindVertexArray(mesh_filter->vao);
-          glDrawArrays(GL_TRIANGLES, 0, mesh_filter->vertex_count);
+          glDrawArrays(GL_TRIANGLES, 0,
+            mesh_filter->vertex_count);
         }
       }
     }
