@@ -6,12 +6,15 @@
 #include <cglm/cglm.h>
 #include <glad/glad.h>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb/stb_image.h>
+
 #include <GLFW/glfw3.h>
 
 #define WIDTH 800
 #define HEIGHT 600
 
-#define PERSP_FOV glm_rad(45.0f)
+#define PERSP_FOV glm_rad(63.0f)
 #define PERSP_NEAR 0.1f
 #define PERSP_FAR 100.0f
 
@@ -84,11 +87,20 @@ enum MaterialRenderFace {
   MRF_DOUBLE,
 };
 
+struct Texture {
+  GLuint id;
+
+  int width;
+  int height;
+  int channels;
+};
+
 struct Material {
   enum MaterialKind material_kind;
   enum MaterialSurfaceType surface_type;
   enum MaterialRenderFace render_face;
 
+  struct Texture* albedo_texture;
   vec4 color;
 
   GLboolean is_alpha_clipping;
@@ -127,6 +139,16 @@ struct ComponentLight {
   float intensity;
 };
 
+enum CameraBackgroundKind {
+  CBK_COLOR,
+  CBK_SKYBOX,
+};
+
+union CameraBackgroundData {
+  vec4 color;
+  // Texture skybox;
+};
+
 struct ComponentCamera {
   float fovy;
   float near;
@@ -138,6 +160,9 @@ struct ComponentCamera {
   // Texture target;
 
   float viewport_rect[4];
+
+  enum CameraBackgroundKind background_kind;
+  union CameraBackgroundData background_data;
 };
 
 struct Component* get_component_by_kind(
@@ -155,52 +180,52 @@ struct Component* get_component_by_kind(
 
 static const float CUBE_VERTICES[] = {
   // back face (−Z)  CCW
-  0.5f, -0.5f, -0.5f,  0, 0,-1,
-  -0.5f, -0.5f, -0.5f,  0, 0,-1,
-  -0.5f,  0.5f, -0.5f,  0, 0,-1,
-  0.5f, -0.5f, -0.5f,  0, 0,-1,
-  -0.5f,  0.5f, -0.5f,  0, 0,-1,
-  0.5f,  0.5f, -0.5f,  0, 0,-1,
+  0.5f, -0.5f, -0.5f, 0, 0,-1, 0.0f, 0.0f,
+  -0.5f, -0.5f, -0.5f, 0, 0,-1, 1.0f, 0.0f,
+  -0.5f, 0.5f, -0.5f, 0, 0,-1, 1.0f, 1.0f,
+  0.5f, -0.5f, -0.5f, 0, 0,-1, 0.0f, 0.0f,
+  -0.5f, 0.5f, -0.5f, 0, 0,-1, 1.0f, 1.0f,
+  0.5f, 0.5f, -0.5f, 0, 0,-1, 0.0f, 1.0f,
 
   // front face (+Z) CCW
-  -0.5f, -0.5f,  0.5f,  0, 0, 1,
-  0.5f, -0.5f,  0.5f,  0, 0, 1,
-  0.5f,  0.5f,  0.5f,  0, 0, 1,
-  -0.5f, -0.5f,  0.5f,  0, 0, 1,
-  0.5f,  0.5f,  0.5f,  0, 0, 1,
-  -0.5f,  0.5f,  0.5f,  0, 0, 1,
+  -0.5f, -0.5f, 0.5f, 0, 0, 1, 0.0f, 0.0f,
+  0.5f, -0.5f, 0.5f, 0, 0, 1, 1.0f, 0.0f,
+  0.5f, 0.5f, 0.5f, 0, 0, 1, 1.0f, 1.0f,
+  -0.5f, -0.5f, 0.5f, 0, 0, 1, 0.0f, 0.0f,
+  0.5f, 0.5f, 0.5f, 0, 0, 1, 1.0f, 1.0f,
+  -0.5f, 0.5f, 0.5f, 0, 0, 1, 0.0f, 1.0f,
 
   // left face (−X) CCW
-  -0.5f, -0.5f, -0.5f, -1, 0, 0,
-  -0.5f, -0.5f,  0.5f, -1, 0, 0,
-  -0.5f,  0.5f,  0.5f, -1, 0, 0,
-  -0.5f, -0.5f, -0.5f, -1, 0, 0,
-  -0.5f,  0.5f,  0.5f, -1, 0, 0,
-  -0.5f,  0.5f, -0.5f, -1, 0, 0,
+  -0.5f, -0.5f, 0.5f, -1, 0, 0, 1.0f, 0.0f,
+  -0.5f, 0.5f, 0.5f, -1, 0, 0, 1.0f, 1.0f,
+  -0.5f, -0.5f, -0.5f, -1, 0, 0, 0.0f, 0.0f,
+  -0.5f, 0.5f, 0.5f, -1, 0, 0, 1.0f, 1.0f,
+  -0.5f, 0.5f, -0.5f, -1, 0, 0, 0.0f, 1.0f,
+  -0.5f, -0.5f, -0.5f, -1, 0, 0, 0.0f, 0.0f,
 
   // right face (+X) CCW
-  0.5f, -0.5f, -0.5f,  1, 0, 0,
-  0.5f,  0.5f,  0.5f,  1, 0, 0,
-  0.5f, -0.5f,  0.5f,  1, 0, 0,
-  0.5f, -0.5f, -0.5f,  1, 0, 0,
-  0.5f,  0.5f, -0.5f,  1, 0, 0,
-  0.5f,  0.5f,  0.5f,  1, 0, 0,
+  0.5f, -0.5f, -0.5f, 1, 0, 0, 0.0f, 0.0f,
+  0.5f, 0.5f, 0.5f, 1, 0, 0, 1.0f, 1.0f,
+  0.5f, -0.5f, 0.5f, 1, 0, 0, 1.0f, 0.0f,
+  0.5f, -0.5f, -0.5f, 1, 0, 0, 0.0f, 0.0f,
+  0.5f, 0.5f, -0.5f, 1, 0, 0, 0.0f, 1.0f,
+  0.5f, 0.5f, 0.5f, 1, 0, 0, 1.0f, 1.0f,
 
   // bottom face (−Y) CCW
-  -0.5f, -0.5f, -0.5f,  0,-1, 0,
-  0.5f, -0.5f, -0.5f,  0,-1, 0,
-  0.5f, -0.5f,  0.5f,  0,-1, 0,
-  -0.5f, -0.5f, -0.5f,  0,-1, 0,
-  0.5f, -0.5f,  0.5f,  0,-1, 0,
-  -0.5f, -0.5f,  0.5f,  0,-1, 0,
+  -0.5f, -0.5f, -0.5f, 0,-1, 0, 0.0f, 0.0f,
+  0.5f, -0.5f, -0.5f, 0,-1, 0, 1.0f, 0.0f,
+  0.5f, -0.5f, 0.5f, 0,-1, 0, 1.0f, 1.0f,
+  -0.5f, -0.5f, -0.5f, 0,-1, 0, 0.0f, 0.0f,
+  0.5f, -0.5f, 0.5f, 0,-1, 0, 1.0f, 1.0f,
+  -0.5f, -0.5f, 0.5f, 0,-1, 0, 0.0f, 1.0f,
 
   // top face (+Y) CCW
-  -0.5f,  0.5f, -0.5f,  0, 1, 0,
-  -0.5f,  0.5f,  0.5f,  0, 1, 0,
-  0.5f,  0.5f,  0.5f,  0, 1, 0,
-  -0.5f,  0.5f, -0.5f,  0, 1, 0,
-  0.5f,  0.5f,  0.5f,  0, 1, 0,
-  0.5f,  0.5f, -0.5f,  0, 1, 0,
+  -0.5f, 0.5f, -0.5f, 0, 1, 0, 0.0f, 0.0f,
+  -0.5f, 0.5f, 0.5f, 0, 1, 0, 1.0f, 0.0f,
+  0.5f, 0.5f, 0.5f, 0, 1, 0, 1.0f, 1.0f,
+  -0.5f, 0.5f, -0.5f, 0, 1, 0, 0.0f, 0.0f,
+  0.5f, 0.5f, 0.5f, 0, 1, 0, 1.0f, 1.0f,
+  0.5f, 0.5f, -0.5f, 0, 1, 0, 0.0f, 1.0f,
 };
 
 GLuint cube_vao() {
@@ -220,17 +245,24 @@ GLuint cube_vao() {
 
   glVertexAttribPointer(
     0, 3, GL_FLOAT,
-    GL_FALSE, 6 * sizeof(float),
+    GL_FALSE, 8 * sizeof(float),
     (void *)0
   );
   glEnableVertexAttribArray(0);
 
   glVertexAttribPointer(
     1, 3, GL_FLOAT,
-    GL_FALSE, 6 * sizeof(float),
+    GL_FALSE, 8 * sizeof(float),
     (void *)(3 * sizeof(float))
   );
   glEnableVertexAttribArray(1);
+
+  glVertexAttribPointer(
+    2, 2, GL_FLOAT,
+    GL_FALSE, 8 * sizeof(float),
+    (void *)(6 * sizeof(float))
+  );
+  glEnableVertexAttribArray(2);
 
   glBindBuffer(GL_ARRAY_BUFFER, 0);
   glBindVertexArray(0);
@@ -263,7 +295,7 @@ int read_file(const char* path, char** buffer) {
 void update_camera_vectors(vec3 front, vec3 right, vec3 up) {
   glm_normalize(front);
 
-  glm_cross(front, (float*)WORLD_UP, right);
+  glm_cross(front, WORLD_UP, right);
   glm_normalize(right);
 
   glm_cross(right, front, up);
@@ -351,9 +383,54 @@ void framebuffer_size_callback(
   (*context->framebuffer_size)[1] = height;
 
   printf("Resized framebuffer to: %d x %d\n", width, height);
+}
 
-  glm_perspective(PERSP_FOV, aspect,
-    PERSP_NEAR, PERSP_FAR, *context->projection);
+struct Texture load_texture(const char* path) {
+  struct Texture texture;
+
+  glGenTextures(1, &texture.id);
+  unsigned char* data = stbi_load(path,
+    &texture.width,
+    &texture.height,
+    &texture.channels,
+    0
+  );
+
+  if (data) {
+    GLenum format;
+    if (texture.channels == 1)
+      format = GL_RED;
+    else if (texture.channels == 3)
+      format = GL_RGB;
+    else if (texture.channels == 4)
+      format = GL_RGBA;
+
+    glBindTexture(GL_TEXTURE_2D, texture.id);
+    glTexImage2D(GL_TEXTURE_2D, 0, format,
+      texture.width, texture.height,
+      0, format, GL_UNSIGNED_BYTE, data);
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glTexParameteri(GL_TEXTURE_2D,
+      GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D,
+      GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D,
+      GL_TEXTURE_MIN_FILTER,
+      GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D,
+      GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    stbi_image_free(data);
+  } else {
+    fprintf(stderr, "Failed to load texture: %s\n", path);
+    texture.id = 0;
+    texture.width = 0;
+    texture.height = 0;
+    texture.channels = 0;
+  }
+
+  return texture;
 }
 
 int main() {
@@ -365,6 +442,8 @@ int main() {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+
+  glfwWindowHint(GLFW_DEPTH_BITS, 24);
 
 #ifdef __APPLE__
   glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
@@ -388,13 +467,11 @@ int main() {
   char* vertex_shader_source = NULL;
   char* fragment_shader_source = NULL;
 
-  if (read_file("src/main.vert", &vertex_shader_source) == 1) {
+  if (read_file("src/main.vert", &vertex_shader_source) != 0)
     return -1;
-  }
 
-  if (read_file("src/main.frag", &fragment_shader_source) == 1) {
+  if (read_file("src/main.frag", &fragment_shader_source) != 0)
     return -1;
-  }
 
   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
   glShaderSource(vertex_shader, 1,
@@ -413,14 +490,28 @@ int main() {
 
   glDeleteShader(vertex_shader);
   glDeleteShader(fragment_shader);
+  free(vertex_shader_source);
+  free(fragment_shader_source);
+
+  // struct Texture box = load_texture("assets/textures/box.jpg");
 
   struct Material lit = {
     .material_kind = MK_LIT,
     .surface_type = MST_TRANSPARENT,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
+    // .albedo_texture = &box,
   };
-  rgba_to_vec4(255, 0, 0, 100, &lit.color);
+  rgba_to_vec4(255, 255, 255, 0, &lit.color);
+
+  struct Material lit2 = {
+    .material_kind = MK_LIT,
+    .surface_type = MST_OPAQUE,
+    .render_face = MRF_FRONT,
+    .is_alpha_clipping = GL_FALSE,
+    // .albedo_texture = &box,
+  };
+  rgba_to_vec4(255, 0, 0, 255, &lit2.color);
 
   struct Material unlit = {
     .material_kind = MK_UNLIT,
@@ -463,6 +554,41 @@ int main() {
     },
   });
 
+  struct Entity cube2 = empty_entity();
+  cube2.name = "Cube2";
+
+  struct Material* cube2_materials = malloc(1 * sizeof(struct Material));
+  cube2_materials[0] = lit2;
+
+  add_component(&cube2, (struct Component){
+    .kind = CK_TRANSFORM,
+    .is_enabled = GL_TRUE,
+    .data = &(struct ComponentTransform){
+      .position = {2.0f, 0.0f, 5.0f},
+      .rotation = {0.0f, 0.0f, 0.0f},
+      .scale = {1.0f, 1.0f, 1.0f},
+    },
+  });
+
+  add_component(&cube2, (struct Component){
+    .kind = CK_MESH_FILTER,
+    .is_enabled = GL_TRUE,
+    .data = &(struct ComponentMeshFilter){
+      .mesh_kind = MFK_CUBE,
+      .vao = cube_vao(),
+      .vertex_count = 36,
+    },
+  });
+
+  add_component(&cube2, (struct Component){
+    .kind = CK_MESH_RENDERER,
+    .is_enabled = GL_TRUE,
+    .data = &(struct ComponentMeshRenderer){
+      .materials = &cube2_materials,
+      .material_count = 1,
+    },
+  });
+
   struct Entity light = empty_entity();
   light.name = "Light";
   add_component(&light, (struct Component){
@@ -481,10 +607,10 @@ int main() {
     .data = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
       .light_data.dir_light = {
-        .direction = {-0.4f, -0.3f, -0.5f},
+        .direction = {0.4f, -0.3f, 0.5f},
         .ambient = {0.02f, 0.02f, 0.02f},
         .diffuse = {0.5f, 0.5f, 0.5f},
-        .specular = {1.0f, 1.0f, 1.0f},
+        .specular = {0.0f, 0.0f, 0.0f},
       },
       .color = {1.0f, 1.0f, 1.0f},
       .intensity = 64.0f,
@@ -503,6 +629,8 @@ int main() {
       .is_perspective = GL_TRUE,
       .is_display_to_screen = GL_TRUE,
       .viewport_rect = {0.0f, 0.0f, 1.0f, 1.0f},
+      .background_kind = CBK_COLOR,
+      .background_data.color = {0.2f, 0.2f, 0.2f, 1.0f},
     },
   });
 
@@ -510,13 +638,13 @@ int main() {
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
     .data = &(struct ComponentTransform){
-      .position = {0.0f, 0.0f, 5.0f},
+      .position = {0.0f, 0.0f, -5.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
   });
 
-  struct Entity entities[] = {cube, light, camera};
+  struct Entity entities[] = {cube2, cube, light, camera};
   size_t entity_count = sizeof(entities) / sizeof(entities[0]);
 
   float aspect = (float)WIDTH / (float)HEIGHT;
@@ -529,12 +657,15 @@ int main() {
   glm_perspective(PERSP_FOV, aspect,
     PERSP_NEAR, PERSP_FAR, projection);
 
-  vec3 front = {0.0f, 0.0f, -1.0f};
+  vec3 front = {0.0f, 0.0f, 1.0f};
   vec3 right, up, target;
 
   update_camera_vectors(front, right, up);
 
   glEnable(GL_DEPTH_TEST);
+  glDepthFunc(GL_LESS);
+  glDepthMask(GL_TRUE);
+  glClearDepth(1.0f);
 
   int* framebuffer_size = malloc(2 * sizeof(int));
   glfwGetFramebufferSize(window,
@@ -549,45 +680,70 @@ int main() {
   glfwSetWindowUserPointer(window, &context);
   glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
+  struct Component *camera_comp = NULL;
+  struct ComponentCamera* camera_data = NULL;
+  struct ComponentTransform* cam_transform = NULL;
+
+  for (size_t i = 0; i < entity_count; i++) {
+    struct Entity entity = entities[i];
+
+    if ((
+      camera_comp = get_component_by_kind(&entity, CK_CAMERA)
+    ) != NULL) {
+      cam_transform =
+          (struct ComponentTransform *)get_component_by_kind(
+              &entity, CK_TRANSFORM)
+              ->data;
+
+      camera_data = (struct ComponentCamera *)camera_comp->data;
+      break;
+    }
+  }
+
   while (!glfwWindowShouldClose(window)) {
     float width = framebuffer_size[0];
     float height = framebuffer_size[1];
-    printf("Framebuffer size: %.0f x %.0f\n", width, height);
-
-    glClearColor(0.4f, 0.388f, 0.376f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     update_camera_vectors(front, right, up);
 
-    struct Component *cam = NULL;
-    struct ComponentTransform* cam_transform = NULL;
+    glm_vec3_add(cam_transform->position, front, target);
+    glm_lookat(cam_transform->position, target, up,
+      view_matrix);
 
-    for (size_t i = 0; i < entity_count; i++) {
-      struct Entity entity = entities[i];
+    float vp_x = camera_data->viewport_rect[0] * width;
+    float vp_y = camera_data->viewport_rect[1] * height;
+    float vp_w = camera_data->viewport_rect[2] * width;
+    float vp_h = camera_data->viewport_rect[3] * height;
 
-      if ((
-        cam = get_component_by_kind(&entity, CK_CAMERA)
-      ) != NULL) {
-        struct ComponentCamera *camera_comp =
-            (struct ComponentCamera *)cam->data;
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(vp_x, vp_y, vp_w, vp_h);
 
-        cam_transform =
-            (struct ComponentTransform *)get_component_by_kind(
-                &entity, CK_TRANSFORM)
-                ->data;
-        if (cam_transform == NULL) {
-          continue;
-        }
-
-        glm_vec3_add(cam_transform->position, front, target);
-        glm_lookat(cam_transform->position, target, up, view_matrix);
-
-        glad_glViewport(camera_comp->viewport_rect[0] * width,
-          camera_comp->viewport_rect[1] * height,
-          camera_comp->viewport_rect[2] * width,
-          camera_comp->viewport_rect[3] * height);
-      }
+    switch (camera_data->background_kind) {
+      case CBK_COLOR:
+        glClearColor(
+          camera_data->background_data.color[0],
+          camera_data->background_data.color[1],
+          camera_data->background_data.color[2],
+          camera_data->background_data.color[3]
+        );
+        break;
+      case CBK_SKYBOX:
+        break;
     }
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    glDisable(GL_SCISSOR_TEST);
+
+    glad_glViewport(camera_data->viewport_rect[0] * width,
+      camera_data->viewport_rect[1] * height,
+      camera_data->viewport_rect[2] * width,
+      camera_data->viewport_rect[3] * height);
+
+
+    aspect = (vp_w) / (vp_h);
+    glm_perspective(camera_data->fovy, aspect,
+      camera_data->near, camera_data->far, projection);
 
     glUseProgram(shader_program);
 
@@ -595,7 +751,7 @@ int main() {
       glfwSetWindowShouldClose(window, 1);
 
     vec3 translation = {0.0f, 0.0f, 0.0f};
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+    if (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
       glm_vec3_muladds(up, -0.1f, translation);
 
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
@@ -699,40 +855,32 @@ int main() {
         glGetUniformLocation(shader_program, "num_dir_lights");
     glUniform1i(num_dir_lights_loc, light_count);
 
-    for (size_t i = 0; i < entity_count; i++) {
-      struct Entity entity = entities[i];
+    for (size_t entity_i = 0; entity_i < entity_count; entity_i++) {
+      struct Entity entity = entities[entity_i];
 
       struct Component *mesh_r = NULL;
+
       if ((
         mesh_r = get_component_by_kind(&entity, CK_MESH_RENDERER)
       ) != NULL) {
         struct ComponentMeshRenderer *mesh_renderer =
             (struct ComponentMeshRenderer *)mesh_r->data;
-
-        if (!mesh_r->is_enabled) {
-          continue;
-        }
+        if (!mesh_r->is_enabled) continue;
 
         struct ComponentMeshFilter* mesh_filter =
             (struct ComponentMeshFilter *)get_component_by_kind(
                 &entity, CK_MESH_FILTER)
                 ->data;
-        if (mesh_filter == NULL) {
-          continue;
-        }
+        if (mesh_filter == NULL) continue;
 
         struct ComponentTransform *transform =
             (struct ComponentTransform *)get_component_by_kind(
                 &entity, CK_TRANSFORM)
                 ->data;
-        if (transform == NULL) {
-          continue;
-        }
+        if (transform == NULL) continue;
 
         struct Material* materials = *mesh_renderer->materials;
-        if (materials == NULL || mesh_renderer->material_count == 0) {
-          continue;
-        }
+        if (materials == NULL || mesh_renderer->material_count == 0) continue;
 
         mat4 model;
         glm_mat4_identity(model);
@@ -752,34 +900,6 @@ int main() {
         for (int i = 0; i < mesh_renderer->material_count; i++) {
           struct Material material = materials[i];
 
-          if (material.surface_type == MST_TRANSPARENT) {
-            glEnable(GL_BLEND);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-            switch (material.render_face) {
-              case MRF_FRONT:
-                glEnable(GL_CULL_FACE);
-                glCullFace(GL_BACK);
-
-                glDepthMask(GL_FALSE);
-                break;
-              case MRF_BACK:
-                glEnable(GL_CULL_FACE);
-                glCullFace(GL_FRONT);
-
-                glDepthMask(GL_FALSE);
-                break;
-              case MRF_DOUBLE:
-                glDisable(GL_CULL_FACE);
-                break;
-            }
-          } else {
-            glDisable(GL_BLEND);
-            glDisable(GL_CULL_FACE);
-
-            glDepthMask(GL_TRUE);
-          }
-
           glUniform4f(object_color_loc,
               material.color[0],
               material.color[1],
@@ -787,17 +907,69 @@ int main() {
               calculate_alpha(material)
           );
 
-          glUniform3fv(view_pos_loc, 1, cam_transform->position);
+          glUniform3fv(view_pos_loc, 1,
+            cam_transform->position);
 
           glUniform1i(
               is_lit_loc,
               material.material_kind == MK_LIT
           );
 
-          glBindVertexArray(mesh_filter->vao);
-          glDrawArrays(GL_TRIANGLES, 0,
-            mesh_filter->vertex_count);
+          if (material.albedo_texture != NULL) {
+            glActiveTexture(GL_TEXTURE0);
+            glBindTexture(
+              GL_TEXTURE_2D,
+              material.albedo_texture->id
+            );
+            GLuint albedo_loc =
+              glGetUniformLocation(shader_program, "albedo_texture");
+            glUniform1i(albedo_loc, 0);
+
+            GLuint use_texture_loc =
+              glGetUniformLocation(shader_program, "use_albedo_texture");
+            glUniform1i(use_texture_loc, 1);
+          } else {
+            GLuint use_texture_loc =
+              glGetUniformLocation(shader_program, "use_albedo_texture");
+            glUniform1i(use_texture_loc, 0);
+          }
+
+          glDepthMask(GL_TRUE);
+          if (material.surface_type == MST_TRANSPARENT) {
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+
+            glDepthFunc(GL_LESS);
+
+            switch (material.render_face) {
+              case MRF_FRONT:
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
+                break;
+              case MRF_BACK:
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_FRONT);
+                break;
+              case MRF_DOUBLE:
+                glDisable(GL_CULL_FACE);
+                break;
+            }
+          } else {
+            glDisable(GL_BLEND);
+
+            glEnable(GL_CULL_FACE);
+            glCullFace(GL_BACK);
+
+            glDisable(GL_POLYGON_OFFSET_FILL);
+
+            glDepthMask(GL_TRUE);
+            glDepthFunc(GL_LEQUAL);
+          }
         }
+
+        glBindVertexArray(mesh_filter->vao);
+        glDrawArrays(GL_TRIANGLES, 0,
+          mesh_filter->vertex_count);
       }
     }
 
@@ -805,6 +977,12 @@ int main() {
     glfwPollEvents();
 
     glfwWaitEventsTimeout(1.0 / 60.0);
+  }
+
+  free(framebuffer_size);
+  free(cube_materials);
+  for (size_t i = 0; i < entity_count; i++) {
+    free(entities[i].components);
   }
 
   glfwDestroyWindow(window);
