@@ -20,6 +20,11 @@
 
 static const vec3 WORLD_UP = {0.0f, 1.0f, 0.0f};
 
+struct Context {
+  mat4 *projection;
+  int** framebuffer_size;
+};
+
 struct Entity {
   char *name;
 
@@ -34,10 +39,13 @@ enum ComponentKind {
   CK_MESH_RENDERER,
   CK_MATERIAL,
   CK_LIGHT,
+  CK_CAMERA,
 };
 
 struct Component {
   enum ComponentKind kind;
+  GLboolean is_enabled;
+
   void *data;
 };
 
@@ -88,8 +96,6 @@ struct Material {
 };
 
 struct ComponentMeshRenderer {
-  GLboolean is_enabled;
-
   struct Material** materials;
   unsigned int material_count;
 };
@@ -119,6 +125,19 @@ struct ComponentLight {
   vec3 color;
 
   float intensity;
+};
+
+struct ComponentCamera {
+  float fovy;
+  float near;
+  float far;
+
+  GLboolean is_perspective;
+
+  GLboolean is_display_to_screen;
+  // Texture target;
+
+  float viewport_rect[4];
 };
 
 struct Component* get_component_by_kind(
@@ -322,15 +341,19 @@ void framebuffer_size_callback(
     int width,
     int height
 ) {
-  glad_glViewport(0, 0, width, height);
-
-  mat4* projection =
-    (mat4 *)glfwGetWindowUserPointer(window);
+  struct Context* context =
+    (struct Context *)glfwGetWindowUserPointer(window);
 
   float aspect = (float)width / (float)height;
+  printf("Aspect ratio: %.2f\n", aspect);
+
+  (*context->framebuffer_size)[0] = width;
+  (*context->framebuffer_size)[1] = height;
+
+  printf("Resized framebuffer to: %d x %d\n", width, height);
 
   glm_perspective(PERSP_FOV, aspect,
-    PERSP_NEAR, PERSP_FAR, *projection);
+    PERSP_NEAR, PERSP_FAR, *context->projection);
 }
 
 int main() {
@@ -413,6 +436,7 @@ int main() {
 
   add_component(&cube, (struct Component){
     .kind = CK_TRANSFORM,
+    .is_enabled = GL_TRUE,
     .data = &(struct ComponentTransform){
       .position = {0.0f, 0.0f, 0.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
@@ -422,6 +446,7 @@ int main() {
 
   add_component(&cube, (struct Component){
     .kind = CK_MESH_FILTER,
+    .is_enabled = GL_TRUE,
     .data = &(struct ComponentMeshFilter){
       .mesh_kind = MFK_CUBE,
       .vao = cube_vao(),
@@ -431,8 +456,8 @@ int main() {
 
   add_component(&cube, (struct Component){
     .kind = CK_MESH_RENDERER,
+    .is_enabled = GL_TRUE,
     .data = &(struct ComponentMeshRenderer){
-      .is_enabled = GL_TRUE,
       .materials = &cube_materials,
       .material_count = 1,
     },
@@ -442,6 +467,7 @@ int main() {
   light.name = "Light";
   add_component(&light, (struct Component){
     .kind = CK_TRANSFORM,
+    .is_enabled = GL_TRUE,
     .data = &(struct ComponentTransform){
       .position = {0.0f, 100.0f, -50.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
@@ -451,6 +477,7 @@ int main() {
 
   add_component(&light, (struct Component){
     .kind = CK_LIGHT,
+    .is_enabled = GL_TRUE,
     .data = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
       .light_data.dir_light = {
@@ -464,7 +491,32 @@ int main() {
     },
   });
 
-  struct Entity entities[] = {cube, light};
+  struct Entity camera = empty_entity();
+  camera.name = "Camera";
+  add_component(&camera, (struct Component){
+    .kind = CK_CAMERA,
+    .is_enabled = GL_TRUE,
+    .data = &(struct ComponentCamera){
+      .fovy = PERSP_FOV,
+      .near = PERSP_NEAR,
+      .far = PERSP_FAR,
+      .is_perspective = GL_TRUE,
+      .is_display_to_screen = GL_TRUE,
+      .viewport_rect = {0.0f, 0.0f, 1.0f, 1.0f},
+    },
+  });
+
+  add_component(&camera, (struct Component){
+    .kind = CK_TRANSFORM,
+    .is_enabled = GL_TRUE,
+    .data = &(struct ComponentTransform){
+      .position = {0.0f, 0.0f, 5.0f},
+      .rotation = {0.0f, 0.0f, 0.0f},
+      .scale = {1.0f, 1.0f, 1.0f},
+    },
+  });
+
+  struct Entity entities[] = {cube, light, camera};
   size_t entity_count = sizeof(entities) / sizeof(entities[0]);
 
   float aspect = (float)WIDTH / (float)HEIGHT;
@@ -480,65 +532,89 @@ int main() {
   vec3 front = {0.0f, 0.0f, -1.0f};
   vec3 right, up, target;
 
-  float camera_pos[] = {-1.0f, 1.0f, 5.0f};
-
   update_camera_vectors(front, right, up);
-  glm_vec3_add(camera_pos, front, target);
-  glm_look(camera_pos, target, up, view_matrix);
 
   glEnable(GL_DEPTH_TEST);
 
-  glfwSetWindowUserPointer(window, &projection);
+  int* framebuffer_size = malloc(2 * sizeof(int));
+  glfwGetFramebufferSize(window,
+    &framebuffer_size[0],
+    &framebuffer_size[1]);
+
+  struct Context context = {
+    .projection = &projection,
+    .framebuffer_size = &framebuffer_size,
+  };
+
+  glfwSetWindowUserPointer(window, &context);
   glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
   while (!glfwWindowShouldClose(window)) {
+    float width = framebuffer_size[0];
+    float height = framebuffer_size[1];
+    printf("Framebuffer size: %.0f x %.0f\n", width, height);
+
     glClearColor(0.4f, 0.388f, 0.376f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     update_camera_vectors(front, right, up);
-    glm_vec3_add(camera_pos, front, target);
-    glm_lookat(camera_pos, target, up, view_matrix);
+
+    struct Component *cam = NULL;
+    struct ComponentTransform* cam_transform = NULL;
+
+    for (size_t i = 0; i < entity_count; i++) {
+      struct Entity entity = entities[i];
+
+      if ((
+        cam = get_component_by_kind(&entity, CK_CAMERA)
+      ) != NULL) {
+        struct ComponentCamera *camera_comp =
+            (struct ComponentCamera *)cam->data;
+
+        cam_transform =
+            (struct ComponentTransform *)get_component_by_kind(
+                &entity, CK_TRANSFORM)
+                ->data;
+        if (cam_transform == NULL) {
+          continue;
+        }
+
+        glm_vec3_add(cam_transform->position, front, target);
+        glm_lookat(cam_transform->position, target, up, view_matrix);
+
+        glad_glViewport(camera_comp->viewport_rect[0] * width,
+          camera_comp->viewport_rect[1] * height,
+          camera_comp->viewport_rect[2] * width,
+          camera_comp->viewport_rect[3] * height);
+      }
+    }
 
     glUseProgram(shader_program);
 
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, 1);
 
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS) {
-      vec3 translation;
-      glm_vec3_scale(up, -0.1f, translation);
-      glm_vec3_add(camera_pos, translation, camera_pos);
-    }
+    vec3 translation = {0.0f, 0.0f, 0.0f};
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+      glm_vec3_muladds(up, -0.1f, translation);
 
-    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-      vec3 translation;
-      glm_vec3_scale(up, 0.1f, translation);
-      glm_vec3_add(camera_pos, translation, camera_pos);
-    }
+    if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
+      glm_vec3_muladds(up, 0.1f, translation);
 
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS) {
-      vec3 translation;
-      glm_vec3_scale(front, 0.1f, translation);
-      glm_vec3_add(camera_pos, translation, camera_pos);
-    }
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+      glm_vec3_muladds(front, 0.1f, translation);
 
-    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS) {
-      vec3 translation;
-      glm_vec3_scale(front, -0.1f, translation);
-      glm_vec3_add(camera_pos, translation, camera_pos);
-    }
+    if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+      glm_vec3_muladds(front, -0.1f, translation);
 
-    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS) {
-      vec3 translation;
-      glm_vec3_scale(right, -0.1f, translation);
-      glm_vec3_add(camera_pos, translation, camera_pos);
-    }
+    if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+      glm_vec3_muladds(right, -0.1f, translation);
 
-    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS) {
-      vec3 translation;
-      glm_vec3_scale(right, 0.1f, translation);
-      glm_vec3_add(camera_pos, translation, camera_pos);
-    }
+    if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+      glm_vec3_muladds(right, 0.1f, translation);
+
+    glm_vec3_add(cam_transform->position, translation,
+      cam_transform->position);
 
     GLuint model_loc =
       glGetUniformLocation(shader_program, "model");
@@ -614,12 +690,6 @@ int main() {
             dir_light_data.direction);
           glUniform1f(light_intensity_loc, light_comp->intensity);
 
-          // vec3 *specular = &((struct ComponentLight *)light->data)
-          //     ->light_data.dir_light.specular;
-          // float s = (float)(sin(glfwGetTime())) * 0.5f + 0.5f;
-
-          // glm_vec3_adds(*specular, s, *specular);
-
           light_count++;
         }
       }
@@ -639,7 +709,7 @@ int main() {
         struct ComponentMeshRenderer *mesh_renderer =
             (struct ComponentMeshRenderer *)mesh_r->data;
 
-        if (!mesh_renderer->is_enabled) {
+        if (!mesh_r->is_enabled) {
           continue;
         }
 
@@ -717,7 +787,7 @@ int main() {
               calculate_alpha(material)
           );
 
-          glUniform3fv(view_pos_loc, 1, camera_pos);
+          glUniform3fv(view_pos_loc, 1, cam_transform->position);
 
           glUniform1i(
               is_lit_loc,
