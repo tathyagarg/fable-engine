@@ -16,23 +16,29 @@ struct DirectionalLight {
   float intensity;
 };
 
+struct Material {
+  vec4 base_map;
+  sampler2D base_map_texture;
+  int has_base_map_texture;
+  float smoothness;
+
+  int is_lit;
+};
+
 in vec3 FragPos;
 in vec3 Normal;
 in vec2 TexCoords;
 
 out vec4 FragColor;
 
-uniform int is_lit;
-
 uniform vec3 view_pos;
 
 uniform DirectionalLight directional_lights[MAX_DIR_LIGHTS];
 uniform int num_dir_lights;
 
-uniform vec4 object_color;
+uniform Material material;
 
-uniform sampler2D albedo_texture;
-uniform int use_albedo_texture;
+uniform vec3 environment_ambient_color;
 
 float fresnel(vec3 view_dir, vec3 normal) {
   float f = 1.0 - max(dot(view_dir, normal), 0.0);
@@ -42,49 +48,42 @@ float fresnel(vec3 view_dir, vec3 normal) {
 void main() {
   vec4 result = vec4(0.0);
 
-  if (is_lit != 0) {
+  if (material.is_lit != 0) {
     vec3 lighting = vec3(0.0);
+    vec3 reflection = vec3(0.0);
 
     vec3 norm = normalize(Normal);
     vec3 view_dir = normalize(view_pos - FragPos);
+
     for (int i = 0; i < num_dir_lights; i++) {
       DirectionalLight light = directional_lights[i];
 
       vec3 light_dir = normalize(-light.direction);
 
-      float diff = dot(norm, light_dir);
-      diff = diff * 0.5 + 0.5;
-      diff = max(diff, 0);
-
-      vec3 ambient = light.ambient * light.color;
-
-      vec3 diffuse = diff * light.diffuse * light.color;
+      float diff = max(dot(norm, light_dir), 0.0);
 
       vec3 reflect_dir = reflect(-light_dir, norm);
       float spec = pow(max(dot(view_dir, reflect_dir), 0.0), light.intensity);
-      vec3 specular = light.specular * spec * light.color;
 
-      lighting += (ambient + diffuse + specular);
+      vec3 l_ambient = light.ambient * light.color + environment_ambient_color;
+      vec3 l_diffuse = diff * light.diffuse * light.color;
+      vec3 l_specular = vec3(spec);
+
+      vec3 l_reflection = vec3(dot(norm, light_dir)) * light.color;
+      l_reflection *= dot(norm, view_dir);
+
+      lighting = l_ambient + l_diffuse + l_specular;
+      reflection = l_reflection;
     }
 
-    vec4 albedo = vec4(0.1);
-
-    if (use_albedo_texture != 0) {
-      vec4 texture_color = texture(albedo_texture, TexCoords);
-
-      if (texture_color.a != 0) {
-        albedo = texture_color * object_color;
-      }
-    } else {
-      albedo = object_color;
+    vec4 base_map_color = material.base_map;
+    if (material.has_base_map_texture != 0) {
+      base_map_color *= texture(material.base_map_texture, TexCoords);
     }
 
-    float f = fresnel(view_dir, norm);
-    lighting = lighting * f + lighting * (1.0 - f) * MINIMUM_A_THRESHOLD;
-
-    result = vec4(lighting, 1.0) * albedo;
+    result = vec4(lighting, 1.0) * base_map_color + (vec4(reflection, length(reflection) != 0) * (material.smoothness / 10.0));
   } else {
-    result = object_color;
+    result = material.base_map;
   }
 
   result.rgb = pow(result.rgb, vec3(1.0 / GAMMA));

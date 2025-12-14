@@ -100,8 +100,9 @@ struct Material {
   enum MaterialSurfaceType surface_type;
   enum MaterialRenderFace render_face;
 
-  struct Texture* albedo_texture;
-  vec4 color;
+  struct Texture* base_map_texture;
+  vec4 base_map;
+  float smoothness;
 
   GLboolean is_alpha_clipping;
   float alpha_clip_threshold;
@@ -300,7 +301,6 @@ void update_camera_vectors(vec3 front, vec3 right, vec3 up) {
 
   glm_cross(right, front, up);
   glm_normalize(up);
-
 }
 
 void rgba_to_vec4(int r, int g, int b, int a, vec4* out_color) {
@@ -326,11 +326,11 @@ void rgba_to_vec4(int r, int g, int b, int a, vec4* out_color) {
 float calculate_alpha(struct Material material) {
   if (!material.is_alpha_clipping || (
       material.is_alpha_clipping &&
-      material.color[3] > material.alpha_clip_threshold)) {
+      material.base_map[3] > material.alpha_clip_threshold)) {
     if (material.surface_type == MST_OPAQUE) {
       return 1.0f;
     } else {
-      return material.color[3];
+      return material.base_map[3];
     }
   } else {
     return 0.0f;
@@ -377,12 +377,9 @@ void framebuffer_size_callback(
     (struct Context *)glfwGetWindowUserPointer(window);
 
   float aspect = (float)width / (float)height;
-  printf("Aspect ratio: %.2f\n", aspect);
 
   (*context->framebuffer_size)[0] = width;
   (*context->framebuffer_size)[1] = height;
-
-  printf("Resized framebuffer to: %d x %d\n", width, height);
 }
 
 struct Texture load_texture(const char* path) {
@@ -502,25 +499,24 @@ int main() {
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
 
-    .albedo_texture = &box,
-
-    // .albedo_texture = &box,
+    .base_map_texture = &knob,
+    .smoothness = 1.0,
   };
-  rgba_to_vec4(0, 255, 0, 200, &lit.color);
+  rgba_to_vec4(255, 255, 0, 255, &lit.base_map);
 
   struct Material lit2 = {
     .material_kind = MK_LIT,
     .surface_type = MST_OPAQUE,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
-    // .albedo_texture = &box,
+    .smoothness = 0.5,
   };
-  rgba_to_vec4(255, 0, 0, 255, &lit2.color);
+  rgba_to_vec4(255, 0, 0, 255, &lit2.base_map);
 
   struct Material unlit = {
     .material_kind = MK_UNLIT,
     .surface_type = MST_TRANSPARENT,
-    .color = {1.0f, 1.0f, 1.0f, 0.2f},
+    .base_map = {1.0f, 1.0f, 1.0f, 0.2f},
   };
 
   struct Entity cube = empty_entity();
@@ -534,7 +530,7 @@ int main() {
     .is_enabled = GL_TRUE,
     .data = &(struct ComponentTransform){
       .position = {0.0f, 0.0f, 0.0f},
-      .rotation = {0.0f, 0.0f, 0.0f},
+      .rotation = {glm_rad(45.0f), 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
   });
@@ -568,7 +564,7 @@ int main() {
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
     .data = &(struct ComponentTransform){
-      .position = {2.0f, 0.0f, 5.0f},
+      .position = {2.0f, 0.0f, 2.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
@@ -593,6 +589,8 @@ int main() {
     },
   });
 
+  vec3 ambient_color = {0.0f, 0.0f, 1.0f};
+
   struct Entity light = empty_entity();
   light.name = "Light";
   add_component(&light, (struct Component){
@@ -611,10 +609,10 @@ int main() {
     .data = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
       .light_data.dir_light = {
-        .direction = {0.4f, -0.3f, 0.5f},
-        .ambient = {0.02f, 0.02f, 0.02f},
-        .diffuse = {0.5f, 0.5f, 0.5f},
-        .specular = {0.0f, 0.0f, 0.0f},
+        .direction = {0.0f, 0.0f, 1.0f},
+        .ambient = {0.0f, 0.0f, 0.0f},
+        .diffuse = {1.0f, 1.0f, 1.0f},
+        .specular = {1.0f, 1.0f, 1.0f},
       },
       .color = {1.0f, 1.0f, 1.0f},
       .intensity = 64.0f,
@@ -642,8 +640,8 @@ int main() {
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
     .data = &(struct ComponentTransform){
-      .position = {0.0f, 0.0f, -5.0f},
-      .rotation = {0.0f, 0.0f, 0.0f},
+      .position = {4.0f, 4.0f, -4.0f},
+      .rotation = {glm_rad(45.0f), 0.0f, glm_rad(-45.0f)},
       .scale = {1.0f, 1.0f, 1.0f},
     },
   });
@@ -704,11 +702,49 @@ int main() {
     }
   }
 
+  vec3 previous_rot = {0.0f, 0.0f, 1.0f};
   while (!glfwWindowShouldClose(window)) {
     float width = framebuffer_size[0];
     float height = framebuffer_size[1];
 
-    update_camera_vectors(front, right, up);
+    if (!glm_vec3_eqv(cam_transform->rotation, previous_rot)) {
+      printf("Rotation changed to: (%f, %f, %f)\n",
+        cam_transform->rotation[0],
+        cam_transform->rotation[1],
+        cam_transform->rotation[2]
+      );
+      glm_vec3_copy(cam_transform->rotation, previous_rot);
+
+      vec3 rotated_front;
+      glm_vec3_copy(front, rotated_front);
+
+      glm_vec3_rotate(rotated_front,
+        cam_transform->rotation[0], (vec3){1.0f, 0.0f, 0.0f});
+      glm_vec3_rotate(rotated_front,
+        cam_transform->rotation[1], (vec3){0.0f, 1.0f, 0.0f});
+      glm_vec3_rotate(rotated_front,
+        cam_transform->rotation[2], (vec3){0.0f, 0.0f, 1.0f});
+
+      printf("Front changed to: (%f, %f, %f)\n",
+        rotated_front[0],
+        rotated_front[1],
+        rotated_front[2]
+      );
+      update_camera_vectors(rotated_front, right, up);
+      glm_vec3_copy(rotated_front, front);
+
+      printf("Right: (%f, %f, %f)\n",
+        right[0],
+        right[1],
+        right[2]
+      );
+
+      printf("Up: (%f, %f, %f)\n",
+        up[0],
+        up[1],
+        up[2]
+      );
+    }
 
     glm_vec3_add(cam_transform->position, front, target);
     glm_lookat(cam_transform->position, target, up,
@@ -783,14 +819,14 @@ int main() {
     GLuint view_loc =
       glGetUniformLocation(shader_program, "view");
 
-    GLuint object_color_loc =
-        glGetUniformLocation(shader_program, "object_color");
+    GLuint base_map_loc =
+        glGetUniformLocation(shader_program, "material.base_map");
 
     GLuint view_pos_loc =
       glGetUniformLocation(shader_program, "view_pos");
 
-    GLuint is_lit_loc =
-      glGetUniformLocation(shader_program, "is_lit");
+    GLuint material_is_lit_loc =
+      glGetUniformLocation(shader_program, "material.is_lit");
 
     int light_count = 0;
 
@@ -859,6 +895,11 @@ int main() {
         glGetUniformLocation(shader_program, "num_dir_lights");
     glUniform1i(num_dir_lights_loc, light_count);
 
+    GLuint environment_ambient_color_loc =
+        glGetUniformLocation(shader_program, "environment_ambient_color");
+    glUniform3fv(environment_ambient_color_loc, 1,
+      ambient_color);
+
     for (size_t entity_i = 0; entity_i < entity_count; entity_i++) {
       struct Entity entity = entities[entity_i];
 
@@ -901,13 +942,19 @@ int main() {
         glUniformMatrix4fv(view_loc, 1,
           GL_FALSE, (float *)view_matrix);
 
+        GLuint has_base_map_texture_loc =
+          glGetUniformLocation(shader_program, "material.has_base_map_texture");
+
+        GLuint material_smoothness_loc = 
+          glGetUniformLocation(shader_program, "material.smoothness");
+
         for (int i = 0; i < mesh_renderer->material_count; i++) {
           struct Material material = materials[i];
 
-          glUniform4f(object_color_loc,
-              material.color[0],
-              material.color[1],
-              material.color[2],
+          glUniform4f(base_map_loc,
+              material.base_map[0],
+              material.base_map[1],
+              material.base_map[2],
               calculate_alpha(material)
           );
 
@@ -915,27 +962,29 @@ int main() {
             cam_transform->position);
 
           glUniform1i(
-              is_lit_loc,
+              material_is_lit_loc,
               material.material_kind == MK_LIT
           );
 
-          if (material.albedo_texture != NULL) {
+          glUniform1f(
+            material_smoothness_loc,
+            material.smoothness
+          );
+
+          if (material.base_map_texture != NULL) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(
               GL_TEXTURE_2D,
-              material.albedo_texture->id
+              material.base_map_texture->id
             );
-            GLuint albedo_loc =
-              glGetUniformLocation(shader_program, "albedo_texture");
-            glUniform1i(albedo_loc, 0);
 
-            GLuint use_texture_loc =
-              glGetUniformLocation(shader_program, "use_albedo_texture");
-            glUniform1i(use_texture_loc, 1);
+            GLuint base_map_texture_loc =
+              glGetUniformLocation(shader_program, "material.base_map_texture");
+            glUniform1i(base_map_texture_loc, 0);
+
+            glUniform1i(has_base_map_texture_loc, 1);
           } else {
-            GLuint use_texture_loc =
-              glGetUniformLocation(shader_program, "use_albedo_texture");
-            glUniform1i(use_texture_loc, 0);
+            glUniform1i(has_base_map_texture_loc, 0);
           }
 
           glDepthMask(GL_TRUE);
