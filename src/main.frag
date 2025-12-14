@@ -67,13 +67,20 @@ void main() {
       lighting += (ambient + diffuse + specular);
     }
 
-    vec4 albedo = object_color;
+    vec4 albedo = vec4(0.1);
+
     if (use_albedo_texture != 0) {
-      albedo *= texture(albedo_texture, TexCoords);
+      vec4 texture_color = texture(albedo_texture, TexCoords);
+
+      if (texture_color.a != 0) {
+        albedo = texture_color * object_color;
+      }
+    } else {
+      albedo = object_color;
     }
 
     float f = fresnel(view_dir, norm);
-    lighting = lighting * f + vec3(1.0 / 255.0) * (1.0 - f);
+    lighting = lighting * f + lighting * (1.0 - f) * MINIMUM_A_THRESHOLD;
 
     result = vec4(lighting, 1.0) * albedo;
   } else {

@@ -295,7 +295,7 @@ int read_file(const char* path, char** buffer) {
 void update_camera_vectors(vec3 front, vec3 right, vec3 up) {
   glm_normalize(front);
 
-  glm_cross(front, WORLD_UP, right);
+  glm_cross(front, (float*)WORLD_UP, right);
   glm_normalize(right);
 
   glm_cross(right, front, up);
@@ -493,16 +493,20 @@ int main() {
   free(vertex_shader_source);
   free(fragment_shader_source);
 
-  // struct Texture box = load_texture("assets/textures/box.jpg");
+  struct Texture box = load_texture("assets/textures/box.jpg");
+  struct Texture knob = load_texture("assets/textures/knob.png");
 
   struct Material lit = {
     .material_kind = MK_LIT,
     .surface_type = MST_TRANSPARENT,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
+
+    .albedo_texture = &box,
+
     // .albedo_texture = &box,
   };
-  rgba_to_vec4(255, 255, 255, 0, &lit.color);
+  rgba_to_vec4(0, 255, 0, 200, &lit.color);
 
   struct Material lit2 = {
     .material_kind = MK_LIT,
@@ -937,7 +941,7 @@ int main() {
           glDepthMask(GL_TRUE);
           if (material.surface_type == MST_TRANSPARENT) {
             glEnable(GL_BLEND);
-            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
             glDepthFunc(GL_LESS);
 
