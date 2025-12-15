@@ -462,12 +462,16 @@ int main() {
   gladLoadGL();
 
   char* vertex_shader_source = NULL;
-  char* fragment_shader_source = NULL;
+  char* lit_frag_source = NULL;
+  char* unlit_frag_source = NULL;
 
   if (read_file("src/main.vert", &vertex_shader_source) != 0)
     return -1;
 
-  if (read_file("src/main.frag", &fragment_shader_source) != 0)
+  if (read_file("src/lit.frag", &lit_frag_source) != 0)
+    return -1;
+
+  if (read_file("src/unlit.frag", &unlit_frag_source) != 0)
     return -1;
 
   GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
@@ -475,55 +479,61 @@ int main() {
     (const char* const*)&vertex_shader_source, NULL);
   glCompileShader(vertex_shader);
 
-  GLuint fragment_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(fragment_shader, 1,
-    (const char* const*)&fragment_shader_source, NULL);
-  glCompileShader(fragment_shader);
+  GLuint lit_frag_shader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(lit_frag_shader, 1,
+    (const char* const*)&lit_frag_source, NULL);
+  glCompileShader(lit_frag_shader);
 
-  GLuint shader_program = glCreateProgram();
-  glAttachShader(shader_program, vertex_shader);
-  glAttachShader(shader_program, fragment_shader);
-  glLinkProgram(shader_program);
+  GLuint unlit_frag_shader = glCreateShader(GL_FRAGMENT_SHADER);
+  glShaderSource(unlit_frag_shader, 1,
+    (const char* const*)&unlit_frag_source, NULL);
+  glCompileShader(unlit_frag_shader);
+
+  GLuint lit_program = glCreateProgram();
+  glAttachShader(lit_program, vertex_shader);
+  glAttachShader(lit_program, lit_frag_shader);
+  glLinkProgram(lit_program);
+
+  GLuint unlit_program = glCreateProgram();
+  glAttachShader(unlit_program, vertex_shader);
+  glAttachShader(unlit_program, unlit_frag_shader);
+  glLinkProgram(unlit_program);
 
   glDeleteShader(vertex_shader);
-  glDeleteShader(fragment_shader);
+  glDeleteShader(lit_frag_shader);
+  glDeleteShader(unlit_frag_shader);
   free(vertex_shader_source);
-  free(fragment_shader_source);
+  free(lit_frag_source);
+  free(unlit_frag_source);
 
   struct Texture box = load_texture("assets/textures/box.jpg");
   struct Texture knob = load_texture("assets/textures/knob.png");
 
-  struct Material lit = {
+  struct Material mat1 = {
     .material_kind = MK_LIT,
     .surface_type = MST_TRANSPARENT,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
 
     .base_map_texture = &knob,
-    .smoothness = 1.0,
+    .smoothness = 0.25,
   };
-  rgba_to_vec4(255, 255, 0, 255, &lit.base_map);
+  rgba_to_vec4(255, 255, 0, 255, &mat1.base_map);
 
-  struct Material lit2 = {
+  struct Material mat2 = {
     .material_kind = MK_LIT,
     .surface_type = MST_OPAQUE,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
     .smoothness = 0.5,
   };
-  rgba_to_vec4(255, 0, 0, 255, &lit2.base_map);
-
-  struct Material unlit = {
-    .material_kind = MK_UNLIT,
-    .surface_type = MST_TRANSPARENT,
-    .base_map = {1.0f, 1.0f, 1.0f, 0.2f},
-  };
+  rgba_to_vec4(255, 0, 0, 255, &mat2.base_map);
 
   struct Entity cube = empty_entity();
   cube.name = "Cube";
 
   struct Material* cube_materials = malloc(1 * sizeof(struct Material));
-  cube_materials[0] = lit;
+  cube_materials[0] = mat1;
 
   add_component(&cube, (struct Component){
     .kind = CK_TRANSFORM,
@@ -558,7 +568,7 @@ int main() {
   cube2.name = "Cube2";
 
   struct Material* cube2_materials = malloc(1 * sizeof(struct Material));
-  cube2_materials[0] = lit2;
+  cube2_materials[0] = mat2;
 
   add_component(&cube2, (struct Component){
     .kind = CK_TRANSFORM,
@@ -708,11 +718,6 @@ int main() {
     float height = framebuffer_size[1];
 
     if (!glm_vec3_eqv(cam_transform->rotation, previous_rot)) {
-      printf("Rotation changed to: (%f, %f, %f)\n",
-        cam_transform->rotation[0],
-        cam_transform->rotation[1],
-        cam_transform->rotation[2]
-      );
       glm_vec3_copy(cam_transform->rotation, previous_rot);
 
       vec3 rotated_front;
@@ -725,25 +730,8 @@ int main() {
       glm_vec3_rotate(rotated_front,
         cam_transform->rotation[2], (vec3){0.0f, 0.0f, 1.0f});
 
-      printf("Front changed to: (%f, %f, %f)\n",
-        rotated_front[0],
-        rotated_front[1],
-        rotated_front[2]
-      );
       update_camera_vectors(rotated_front, right, up);
       glm_vec3_copy(rotated_front, front);
-
-      printf("Right: (%f, %f, %f)\n",
-        right[0],
-        right[1],
-        right[2]
-      );
-
-      printf("Up: (%f, %f, %f)\n",
-        up[0],
-        up[1],
-        up[2]
-      );
     }
 
     glm_vec3_add(cam_transform->position, front, target);
@@ -785,7 +773,7 @@ int main() {
     glm_perspective(camera_data->fovy, aspect,
       camera_data->near, camera_data->far, projection);
 
-    glUseProgram(shader_program);
+    // glUseProgram(shader_program);
 
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, 1);
@@ -812,23 +800,8 @@ int main() {
     glm_vec3_add(cam_transform->position, translation,
       cam_transform->position);
 
-    GLuint model_loc =
-      glGetUniformLocation(shader_program, "model");
-    GLuint proj_loc =
-      glGetUniformLocation(shader_program, "projection");
-    GLuint view_loc =
-      glGetUniformLocation(shader_program, "view");
-
-    GLuint base_map_loc =
-        glGetUniformLocation(shader_program, "material.base_map");
-
-    GLuint view_pos_loc =
-      glGetUniformLocation(shader_program, "view_pos");
-
-    GLuint material_is_lit_loc =
-      glGetUniformLocation(shader_program, "material.is_lit");
-
     int light_count = 0;
+    struct ComponentLight dir_lights[10];
 
     for (size_t i = 0; i < entity_count; i++) {
       struct Entity entity = entities[i];
@@ -841,64 +814,12 @@ int main() {
             (struct ComponentLight *)light->data;
 
         if (light_comp->light_kind == LK_DIRECTIONAL) {
-          struct DirLightData dir_light_data = light_comp->light_data.dir_light;
-
-          char buffer[100];
-          sprintf(buffer, "directional_lights[%d].color", light_count);
-
-          GLuint light_color_loc =
-              glGetUniformLocation(shader_program, buffer);
-
-          memset(buffer, 0, sizeof(buffer));
-          sprintf(buffer, "directional_lights[%d].direction", light_count);
-          GLuint light_direction_loc =
-              glGetUniformLocation(shader_program, buffer);
-
-          memset(buffer, 0, sizeof(buffer));
-          sprintf(buffer, "directional_lights[%d].ambient", light_count);
-          GLuint light_ambient_loc =
-              glGetUniformLocation(shader_program, buffer);
-
-          memset(buffer, 0, sizeof(buffer));
-          sprintf(buffer, "directional_lights[%d].diffuse", light_count);
-          GLuint light_diffuse_loc =
-              glGetUniformLocation(shader_program, buffer);
-
-          memset(buffer, 0, sizeof(buffer));
-          sprintf(buffer, "directional_lights[%d].specular", light_count);
-          GLuint light_specular_loc =
-              glGetUniformLocation(shader_program, buffer);
-
-          memset(buffer, 0, sizeof(buffer));
-          sprintf(buffer, "directional_lights[%d].intensity", light_count);
-          GLuint light_intensity_loc =
-              glGetUniformLocation(shader_program, buffer);
-
-          glUniform3fv(light_ambient_loc, 1,
-            dir_light_data.ambient);
-          glUniform3fv(light_diffuse_loc, 1,
-            dir_light_data.diffuse);
-          glUniform3fv(light_specular_loc, 1,
-            dir_light_data.specular);
-          glUniform3fv(light_color_loc, 1,
-            light_comp->color);
-          glUniform3fv(light_direction_loc, 1,
-            dir_light_data.direction);
-          glUniform1f(light_intensity_loc, light_comp->intensity);
-
+          // struct DirLightData dir_light_data = light_comp->light_data.dir_light;
+          dir_lights[light_count] = *light_comp;
           light_count++;
         }
       }
     }
-
-    GLuint num_dir_lights_loc =
-        glGetUniformLocation(shader_program, "num_dir_lights");
-    glUniform1i(num_dir_lights_loc, light_count);
-
-    GLuint environment_ambient_color_loc =
-        glGetUniformLocation(shader_program, "environment_ambient_color");
-    glUniform3fv(environment_ambient_color_loc, 1,
-      ambient_color);
 
     for (size_t entity_i = 0; entity_i < entity_count; entity_i++) {
       struct Entity entity = entities[entity_i];
@@ -935,21 +856,102 @@ int main() {
         glm_rotate_z(model, transform->rotation[2], model);
         glm_scale(model, transform->scale);
 
-        glUniformMatrix4fv(model_loc, 1,
-          GL_FALSE, (float *)model);
-        glUniformMatrix4fv(proj_loc, 1,
-          GL_FALSE, (float *)projection);
-        glUniformMatrix4fv(view_loc, 1,
-          GL_FALSE, (float *)view_matrix);
-
-        GLuint has_base_map_texture_loc =
-          glGetUniformLocation(shader_program, "material.has_base_map_texture");
-
-        GLuint material_smoothness_loc = 
-          glGetUniformLocation(shader_program, "material.smoothness");
-
         for (int i = 0; i < mesh_renderer->material_count; i++) {
           struct Material material = materials[i];
+
+          GLuint program;
+          if (material.material_kind == MK_LIT) {
+            glUseProgram(lit_program);
+            program = lit_program;
+
+            for (int i = 0; i < light_count; i++) {
+              struct ComponentLight light_comp = dir_lights[i];
+
+              struct DirLightData dir_light_data = light_comp.light_data.dir_light;
+
+              char buffer[100];
+              sprintf(buffer, "directional_lights[%d].color", i);
+
+              GLuint light_color_loc =
+                  glGetUniformLocation(program, buffer);
+
+              memset(buffer, 0, sizeof(buffer));
+              sprintf(buffer, "directional_lights[%d].direction", i);
+              GLuint light_direction_loc =
+                  glGetUniformLocation(program, buffer);
+
+              memset(buffer, 0, sizeof(buffer));
+              sprintf(buffer, "directional_lights[%d].ambient", i);
+              GLuint light_ambient_loc =
+                  glGetUniformLocation(program, buffer);
+
+              memset(buffer, 0, sizeof(buffer));
+              sprintf(buffer, "directional_lights[%d].diffuse", i);
+              GLuint light_diffuse_loc =
+                  glGetUniformLocation(program, buffer);
+
+              memset(buffer, 0, sizeof(buffer));
+              sprintf(buffer, "directional_lights[%d].specular", i);
+              GLuint light_specular_loc =
+                  glGetUniformLocation(program, buffer);
+
+              memset(buffer, 0, sizeof(buffer));
+              sprintf(buffer, "directional_lights[%d].intensity", i);
+              GLuint light_intensity_loc =
+                  glGetUniformLocation(program, buffer);
+
+              glUniform3fv(light_ambient_loc, 1,
+                dir_light_data.ambient);
+              glUniform3fv(light_diffuse_loc, 1,
+                dir_light_data.diffuse);
+              glUniform3fv(light_specular_loc, 1,
+                dir_light_data.specular);
+              glUniform3fv(light_color_loc, 1,
+                light_comp.color);
+              glUniform3fv(light_direction_loc, 1,
+                dir_light_data.direction);
+              glUniform1f(light_intensity_loc, light_comp.intensity);
+            }
+
+          } else {
+            glUseProgram(unlit_program);
+            program = unlit_program;
+          }
+
+          GLuint model_loc =
+            glGetUniformLocation(program, "model");
+          glUniformMatrix4fv(model_loc, 1,
+            GL_FALSE, (float *)model);
+          GLuint proj_loc =
+            glGetUniformLocation(program, "projection");
+          glUniformMatrix4fv(proj_loc, 1,
+            GL_FALSE, (float *)projection);
+          GLuint view_loc =
+            glGetUniformLocation(program, "view");
+          glUniformMatrix4fv(view_loc, 1,
+            GL_FALSE, (float *)view_matrix);
+
+          GLuint base_map_loc =
+              glGetUniformLocation(program, "material.base_map");
+
+          GLuint view_pos_loc =
+            glGetUniformLocation(program, "view_pos");
+
+          GLuint num_dir_lights_loc =
+              glGetUniformLocation(program, "num_dir_lights");
+          glUniform1i(num_dir_lights_loc, light_count);
+
+          GLuint environment_ambient_color_loc =
+              glGetUniformLocation(program, "environment_ambient_color");
+          glUniform3fv(environment_ambient_color_loc, 1,
+            ambient_color);
+
+          GLuint has_base_map_texture_loc =
+            glGetUniformLocation(program, "material.has_base_map_texture");
+
+          GLuint material_smoothness_loc =
+            glGetUniformLocation(program, "material.smoothness");
+          glUniform1f(material_smoothness_loc, material.smoothness);
 
           glUniform4f(base_map_loc,
               material.base_map[0],
@@ -961,16 +963,6 @@ int main() {
           glUniform3fv(view_pos_loc, 1,
             cam_transform->position);
 
-          glUniform1i(
-              material_is_lit_loc,
-              material.material_kind == MK_LIT
-          );
-
-          glUniform1f(
-            material_smoothness_loc,
-            material.smoothness
-          );
-
           if (material.base_map_texture != NULL) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(
@@ -979,7 +971,7 @@ int main() {
             );
 
             GLuint base_map_texture_loc =
-              glGetUniformLocation(shader_program, "material.base_map_texture");
+              glGetUniformLocation(program, "material.base_map_texture");
             glUniform1i(base_map_texture_loc, 0);
 
             glUniform1i(has_base_map_texture_loc, 1);
