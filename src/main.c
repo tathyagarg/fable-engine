@@ -102,6 +102,7 @@ struct Material {
 
   struct Texture* base_map_texture;
   vec4 base_map;
+  vec3 specular_map;
   float smoothness;
 
   GLboolean is_alpha_clipping;
@@ -515,10 +516,11 @@ int main() {
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
 
+    .base_map = {0.0f, 1.0f, 0.0f, 1.0f},
+    .specular_map = {1.0f, 0.0f, 0.0f},
     .base_map_texture = &knob,
     .smoothness = 0.25,
   };
-  rgba_to_vec4(255, 255, 0, 255, &mat1.base_map);
 
   struct Material mat2 = {
     .material_kind = MK_LIT,
@@ -526,6 +528,7 @@ int main() {
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
     .smoothness = 0.5,
+    .specular_map = {0.0f, 0.0f, 0.0f},
   };
   rgba_to_vec4(255, 0, 0, 255, &mat2.base_map);
 
@@ -952,6 +955,11 @@ int main() {
           GLuint material_smoothness_loc =
             glGetUniformLocation(program, "material.smoothness");
           glUniform1f(material_smoothness_loc, material.smoothness);
+
+          GLuint material_specular_map_loc =
+            glGetUniformLocation(program, "material.specular_map");
+          glUniform3fv(material_specular_map_loc, 1,
+            material.specular_map);
 
           glUniform4f(base_map_loc,
               material.base_map[0],

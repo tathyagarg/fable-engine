@@ -18,8 +18,11 @@ struct DirectionalLight {
 
 struct Material {
   vec4 base_map;
+  vec3 specular_map;
+
   sampler2D base_map_texture;
   int has_base_map_texture;
+
   float smoothness;
 };
 
@@ -52,6 +55,11 @@ void main() {
   vec3 norm = normalize(Normal);
   vec3 view_dir = normalize(view_pos - FragPos);
 
+  vec4 base_map_color = material.base_map;
+  if (material.has_base_map_texture != 0) {
+    base_map_color *= texture(material.base_map_texture, TexCoords);
+  }
+
   for (int i = 0; i < num_dir_lights; i++) {
     DirectionalLight light = directional_lights[i];
 
@@ -70,18 +78,15 @@ void main() {
     l_reflection *= dot(norm, view_dir);
     // vec3 l_reflection = vec3(dot(norm, view_dir));
 
-    lighting = l_ambient + l_diffuse + l_specular;
+    lighting = (l_ambient + l_diffuse) * base_map_color.rgb + l_specular * material.specular_map;
     reflection = l_reflection;
   }
 
-  vec4 base_map_color = material.base_map;
-  if (material.has_base_map_texture != 0) {
-    base_map_color *= texture(material.base_map_texture, TexCoords);
-  }
+  vec4 refl = vec4(reflection, length(reflection));
+  vec4 reflection_strength = vec4(material.specular_map, base_map_color.a) + ((1 - material.smoothness) / 8.0);
 
-  vec4 refl = vec4(reflection, length(reflection)) * (material.smoothness / 2.0);
+  result = (refl * reflection_strength) + vec4(lighting, base_map_color.a);
 
-  result = (vec4(lighting, 1.0) * base_map_color) + refl;
   result.rgb = pow(result.rgb, vec3(1.0 / GAMMA));
 
   FragColor = result;
