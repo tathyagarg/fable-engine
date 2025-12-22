@@ -77,8 +77,8 @@ enum MaterialShader {
 };
 
 enum MaterialSurfaceType {
-  MST_OPAQUE,
-  MST_TRANSPARENT,
+  MST_OPAQUE = 0,
+  MST_TRANSPARENT = 1,
 };
 
 enum MaterialRenderFace {
@@ -107,6 +107,8 @@ struct Material {
   enum MaterialSurfaceType surface_type;
 
   enum MaterialRenderFace render_face;
+
+  GLboolean is_preserve_specular_highlights;
 
   // surface inputs
   struct ColoredTexture* base_map_texture;
@@ -320,33 +322,6 @@ void rgba_to_vec4(int r, int g, int b, int a, vec4* out_color) {
   (*out_color)[3] = a / 255.0f;
 }
 
-/*
- * Alpha calculation with clipping
- * +---------+-----------+-----------------+-----------------+
- * | Opaque? | Clipping? | Alpha > Thresh? | Resulting Alpha |
- * +---------+-----------+-----------------+-----------------+
- * |   Yes   |    Yes    |       Yes       |      1.0f       |
- * |   Yes   |    Yes    |       No        |      0.0f       |
- * |   Yes   |    No     |       N/A       |      1.0f       |
- * |   No    |    Yes    |       Yes       |     Alpha       |
- * |   No    |    Yes    |       No        |      0.0f       |
- * |   No    |    No     |       N/A       |     Alpha       |
- * +---------+-----------+-----------------+-----------------+
- * */
-float calculate_alpha(struct Material material) {
-  if (!material.is_alpha_clipping || (
-      material.is_alpha_clipping &&
-      material.base_map_texture->color[3] > material.alpha_clip_threshold)) {
-    if (material.surface_type == MST_OPAQUE) {
-      return 1.0f;
-    } else {
-      return material.base_map_texture->color[3];
-    }
-  } else {
-    return 0.0f;
-  }
-}
-
 struct Entity empty_entity() {
   struct Entity entity;
   entity.name = "Empty";
@@ -440,6 +415,59 @@ struct Texture load_texture(const char* path) {
   return texture;
 }
 
+void uniform_material(GLuint program, struct Material material) {
+  GLuint has_base_map_texture_loc =
+      glGetUniformLocation(program, "material.has_base_map_texture");
+
+  if (material.base_map_texture->texture != NULL) {
+    GLuint base_map_loc =
+        glGetUniformLocation(program, "material.base_map_texture");
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D,
+      material.base_map_texture->texture->id);
+    glUniform1i(base_map_loc, 0);
+
+    glUniform1i(has_base_map_texture_loc, GL_TRUE);
+  } else {
+    glUniform1i(has_base_map_texture_loc, GL_FALSE);
+  }
+
+  GLuint base_map_loc =
+      glGetUniformLocation(program, "material.base_map");
+  glUniform4fv(base_map_loc, 1,
+    material.base_map_texture->color);
+
+  GLuint specular_map_loc =
+      glGetUniformLocation(program, "material.specular_map");
+  glUniform3fv(specular_map_loc, 1,
+    material.specular_map);
+
+  GLuint smoothness_loc =
+      glGetUniformLocation(program, "material.smoothness");
+  glUniform1f(smoothness_loc,
+    material.smoothness);
+
+  GLuint is_alpha_clipping_loc =
+      glGetUniformLocation(program, "material.is_alpha_clipping");
+  glUniform1i(is_alpha_clipping_loc,
+    material.is_alpha_clipping ? GL_TRUE : GL_FALSE);
+
+  GLuint alpha_clip_threshold_loc =
+      glGetUniformLocation(program, "material.alpha_clip_threshold");
+  glUniform1f(alpha_clip_threshold_loc,
+    material.alpha_clip_threshold);
+
+  GLuint surface_type_loc =
+      glGetUniformLocation(program, "material.surface_type");
+  glUniform1i(surface_type_loc,
+    material.surface_type);
+
+  GLuint is_preserve_specular_highlights_loc =
+      glGetUniformLocation(program, "material.is_preserve_specular_highlights");
+  glUniform1i(is_preserve_specular_highlights_loc,
+    material.is_preserve_specular_highlights ? GL_TRUE : GL_FALSE);
+}
+
 int main() {
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
@@ -523,6 +551,7 @@ int main() {
     .material_shader = MS_LIT,
     .surface_type = MST_TRANSPARENT,
     .render_face = MRF_FRONT,
+    .is_preserve_specular_highlights = GL_TRUE,
     .is_alpha_clipping = GL_FALSE,
 
     .base_map_texture = &(struct ColoredTexture){
@@ -948,9 +977,6 @@ int main() {
           glUniformMatrix4fv(view_loc, 1,
             GL_FALSE, (float *)view_matrix);
 
-          GLuint base_map_loc =
-              glGetUniformLocation(program, "material.base_map");
-
           GLuint view_pos_loc =
             glGetUniformLocation(program, "view_pos");
 
@@ -963,43 +989,10 @@ int main() {
           glUniform3fv(environment_ambient_color_loc, 1,
             ambient_color);
 
-          GLuint has_base_map_texture_loc =
-            glGetUniformLocation(program, "material.has_base_map_texture");
-
-          GLuint material_smoothness_loc =
-            glGetUniformLocation(program, "material.smoothness");
-          glUniform1f(material_smoothness_loc, material.smoothness);
-
-          GLuint material_specular_map_loc =
-            glGetUniformLocation(program, "material.specular_map");
-          glUniform3fv(material_specular_map_loc, 1,
-            material.specular_map);
-
-          glUniform4f(base_map_loc,
-              material.base_map_texture->color[0],
-              material.base_map_texture->color[1],
-              material.base_map_texture->color[2],
-              calculate_alpha(material)
-          );
-
           glUniform3fv(view_pos_loc, 1,
             cam_transform->position);
 
-          if (material.base_map_texture->texture != NULL) {
-            glActiveTexture(GL_TEXTURE0);
-            glBindTexture(
-              GL_TEXTURE_2D,
-              material.base_map_texture->texture->id
-            );
-
-            GLuint base_map_texture_loc =
-              glGetUniformLocation(program, "material.base_map_texture");
-            glUniform1i(base_map_texture_loc, 0);
-
-            glUniform1i(has_base_map_texture_loc, 1);
-          } else {
-            glUniform1i(has_base_map_texture_loc, 0);
-          }
+          uniform_material(program, material);
 
           glDepthMask(GL_TRUE);
           if (material.surface_type == MST_TRANSPARENT) {
