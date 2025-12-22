@@ -1,7 +1,7 @@
 #version 330 core
 
 #define MAX_DIR_LIGHTS 4
-#define MINIMUM_A_THRESHOLD 0.1
+#define MINIMUM_A_THRESHOLD 0.0
 #define GAMMA 2.2
 
 struct DirectionalLight {
@@ -41,11 +41,6 @@ uniform Material material;
 
 uniform vec3 environment_ambient_color;
 
-float fresnel(vec3 view_dir, vec3 normal) {
-  float f = 1.0 - max(dot(view_dir, normal), 0.0);
-  return pow(f, 5.0);
-}
-
 void main() {
   vec4 result = vec4(0.0);
 
@@ -59,6 +54,11 @@ void main() {
   if (material.has_base_map_texture != 0) {
     base_map_color *= texture(material.base_map_texture, TexCoords);
   }
+
+  // float color_dist = length(base_map_color.rgb - material.specular_map) / sqrt(3.0);
+
+  // // vec3 color = base_map_color.rgb * (1.0 - color_dist) + material.specular_map * color_dist;
+  // vec3 color = mix(base_map_color.rgb, material.specular_map, color_dist);
 
   for (int i = 0; i < num_dir_lights; i++) {
     DirectionalLight light = directional_lights[i];
@@ -78,14 +78,25 @@ void main() {
     l_reflection *= dot(norm, view_dir);
     // vec3 l_reflection = vec3(dot(norm, view_dir));
 
-    lighting = (l_ambient + l_diffuse) * base_map_color.rgb + l_specular * material.specular_map;
-    reflection = l_reflection;
+    vec3 add_lighting = (l_ambient + l_diffuse + l_specular) * base_map_color.rgb;
+
+    if (length(material.specular_map) > MINIMUM_A_THRESHOLD) {
+      float color_distance = min(length(add_lighting - material.specular_map), 1.0);
+      lighting = mix(add_lighting, material.specular_map, color_distance);
+    } else {
+      lighting += add_lighting;
+    }
+
+    // lighting = vec3(color_distance);
+
+    // reflection = l_reflection;
   }
 
   vec4 refl = vec4(reflection, length(reflection));
   vec4 reflection_strength = vec4(material.specular_map, base_map_color.a) + ((1 - material.smoothness) / 8.0);
 
   result = (refl * reflection_strength) + vec4(lighting, base_map_color.a);
+  // result = vec4(vec3(distance_between_basemap_and_specular), 1.0);
 
   result.rgb = pow(result.rgb, vec3(1.0 / GAMMA));
 

@@ -71,9 +71,9 @@ struct ComponentMeshFilter {
   unsigned int vertex_count;
 };
 
-enum MaterialKind {
-  MK_LIT,
-  MK_UNLIT,
+enum MaterialShader {
+  MS_LIT,
+  MS_UNLIT,
 };
 
 enum MaterialSurfaceType {
@@ -95,13 +95,22 @@ struct Texture {
   int channels;
 };
 
+struct ColoredTexture {
+  struct Texture* texture;
+  vec4 color;
+};
+
 struct Material {
-  enum MaterialKind material_kind;
+  enum MaterialShader material_shader;
+
+  // surface options
   enum MaterialSurfaceType surface_type;
+
   enum MaterialRenderFace render_face;
 
-  struct Texture* base_map_texture;
-  vec4 base_map;
+  // surface inputs
+  struct ColoredTexture* base_map_texture;
+
   vec3 specular_map;
   float smoothness;
 
@@ -327,11 +336,11 @@ void rgba_to_vec4(int r, int g, int b, int a, vec4* out_color) {
 float calculate_alpha(struct Material material) {
   if (!material.is_alpha_clipping || (
       material.is_alpha_clipping &&
-      material.base_map[3] > material.alpha_clip_threshold)) {
+      material.base_map_texture->color[3] > material.alpha_clip_threshold)) {
     if (material.surface_type == MST_OPAQUE) {
       return 1.0f;
     } else {
-      return material.base_map[3];
+      return material.base_map_texture->color[3];
     }
   } else {
     return 0.0f;
@@ -511,26 +520,31 @@ int main() {
   struct Texture knob = load_texture("assets/textures/knob.png");
 
   struct Material mat1 = {
-    .material_kind = MK_LIT,
+    .material_shader = MS_LIT,
     .surface_type = MST_TRANSPARENT,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
 
-    .base_map = {0.0f, 1.0f, 0.0f, 1.0f},
-    .specular_map = {1.0f, 0.0f, 0.0f},
-    .base_map_texture = &knob,
+    .base_map_texture = &(struct ColoredTexture){
+      .texture = &knob,
+      .color = {0.0f, 1.0f, 0.0f, 1.0f}
+    },
+    .specular_map = {0.0f, 0.0f, 1.0f},
     .smoothness = 0.25,
   };
 
   struct Material mat2 = {
-    .material_kind = MK_LIT,
+    .material_shader = MS_LIT,
     .surface_type = MST_OPAQUE,
     .render_face = MRF_FRONT,
     .is_alpha_clipping = GL_FALSE,
     .smoothness = 0.5,
     .specular_map = {0.0f, 0.0f, 0.0f},
+    .base_map_texture = &(struct ColoredTexture){
+      .texture = NULL,
+    },
   };
-  rgba_to_vec4(255, 0, 0, 255, &mat2.base_map);
+  rgba_to_vec4(255, 0, 0, 255, &mat2.base_map_texture->color);
 
   struct Entity cube = empty_entity();
   cube.name = "Cube";
@@ -863,7 +877,7 @@ int main() {
           struct Material material = materials[i];
 
           GLuint program;
-          if (material.material_kind == MK_LIT) {
+          if (material.material_shader == MS_LIT) {
             glUseProgram(lit_program);
             program = lit_program;
 
@@ -962,20 +976,20 @@ int main() {
             material.specular_map);
 
           glUniform4f(base_map_loc,
-              material.base_map[0],
-              material.base_map[1],
-              material.base_map[2],
+              material.base_map_texture->color[0],
+              material.base_map_texture->color[1],
+              material.base_map_texture->color[2],
               calculate_alpha(material)
           );
 
           glUniform3fv(view_pos_loc, 1,
             cam_transform->position);
 
-          if (material.base_map_texture != NULL) {
+          if (material.base_map_texture->texture != NULL) {
             glActiveTexture(GL_TEXTURE0);
             glBindTexture(
               GL_TEXTURE_2D,
-              material.base_map_texture->id
+              material.base_map_texture->texture->id
             );
 
             GLuint base_map_texture_loc =
