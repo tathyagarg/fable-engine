@@ -89,9 +89,12 @@ void main() {
         material.base_map.a,
         material.surface_type
       ));
-  if (material.has_base_map_texture != 0) {
-    base_map_color *= texture(material.base_map_texture, TexCoords);
+
+  if (material.has_base_map_texture == 1) {
+    // base_map_color = vec4(1.0, 0.0, 0.0, 1.0);
+    base_map_color = texture(material.base_map_texture, TexCoords);
   }
+  // base_map_color = texture(material.base_map_texture, TexCoords);
 
   vec3 reflection = vec3(0.0);
   if (material.is_preserve_specular_highlights != 0) {
@@ -130,6 +133,8 @@ void main() {
 
   vec4 refl = vec4(reflection, length(reflection));
   vec4 reflection_strength = vec4(material.specular_map, base_map_color.a) + ((1 - material.smoothness) / 4.0);
+
+  // result = base_map_color;
 
   result = (refl * reflection_strength) + vec4(lighting, base_map_color.a);
   // result = vec4(vec3(distance_between_basemap_and_specular), 1.0);

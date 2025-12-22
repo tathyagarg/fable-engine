@@ -10,6 +10,7 @@
 #include <stb/stb_image.h>
 
 #include <GLFW/glfw3.h>
+#include "fable/fable.h"
 
 #define WIDTH 800
 #define HEIGHT 600
@@ -18,165 +19,12 @@
 #define PERSP_NEAR 0.1f
 #define PERSP_FAR 100.0f
 
+#define DEBUG 1
+
+#define FRAME_RATE 60.0f
+
 //  TODO: Load from config file
 #define TITLE "Fable Engine"
-
-static const vec3 WORLD_UP = {0.0f, 1.0f, 0.0f};
-
-struct Context {
-  mat4 *projection;
-  int** framebuffer_size;
-};
-
-struct Entity {
-  char *name;
-
-  struct Component *components;
-  unsigned int component_count;
-  unsigned int reserved_components;
-};
-
-enum ComponentKind {
-  CK_TRANSFORM,
-  CK_MESH_FILTER,
-  CK_MESH_RENDERER,
-  CK_MATERIAL,
-  CK_LIGHT,
-  CK_CAMERA,
-};
-
-struct Component {
-  enum ComponentKind kind;
-  GLboolean is_enabled;
-
-  void *data;
-};
-
-struct ComponentTransform {
-  vec3 position;
-  vec3 rotation;
-  vec3 scale;
-};
-
-enum MeshFilterKind {
-  MFK_CUBE,
-  MFK_SPHERE,
-  MFK_PLANE,
-  MFK_CUSTOM,
-};
-
-struct ComponentMeshFilter {
-  enum MeshFilterKind mesh_kind;
-  GLuint vao;
-  unsigned int vertex_count;
-};
-
-enum MaterialShader {
-  MS_LIT,
-  MS_UNLIT,
-};
-
-enum MaterialSurfaceType {
-  MST_OPAQUE = 0,
-  MST_TRANSPARENT = 1,
-};
-
-enum MaterialRenderFace {
-  MRF_FRONT,
-  MRF_BACK,
-  MRF_DOUBLE,
-};
-
-struct Texture {
-  GLuint id;
-
-  int width;
-  int height;
-  int channels;
-};
-
-struct ColoredTexture {
-  struct Texture* texture;
-  vec4 color;
-};
-
-struct Material {
-  enum MaterialShader material_shader;
-
-  // surface options
-  enum MaterialSurfaceType surface_type;
-
-  enum MaterialRenderFace render_face;
-
-  GLboolean is_preserve_specular_highlights;
-
-  // surface inputs
-  struct ColoredTexture* base_map_texture;
-
-  vec3 specular_map;
-  float smoothness;
-
-  GLboolean is_alpha_clipping;
-  float alpha_clip_threshold;
-};
-
-struct ComponentMeshRenderer {
-  struct Material** materials;
-  unsigned int material_count;
-};
-
-enum LightKind {
-  LK_DIRECTIONAL,
-  LK_POINT,
-  LK_SPOT,
-};
-
-struct DirLightData {
-  vec3 direction;
-
-  vec3 ambient;
-  vec3 diffuse;
-  vec3 specular;
-};
-
-union LightData {
-  struct DirLightData dir_light;
-};
-
-struct ComponentLight {
-  enum LightKind light_kind;
-  union LightData light_data;
-
-  vec3 color;
-
-  float intensity;
-};
-
-enum CameraBackgroundKind {
-  CBK_COLOR,
-  CBK_SKYBOX,
-};
-
-union CameraBackgroundData {
-  vec4 color;
-  // Texture skybox;
-};
-
-struct ComponentCamera {
-  float fovy;
-  float near;
-  float far;
-
-  GLboolean is_perspective;
-
-  GLboolean is_display_to_screen;
-  // Texture target;
-
-  float viewport_rect[4];
-
-  enum CameraBackgroundKind background_kind;
-  union CameraBackgroundData background_data;
-};
 
 struct Component* get_component_by_kind(
     struct Entity *entity,
@@ -191,57 +39,7 @@ struct Component* get_component_by_kind(
   return NULL;
 }
 
-static const float CUBE_VERTICES[] = {
-  // back face (−Z)  CCW
-  0.5f, -0.5f, -0.5f, 0, 0,-1, 0.0f, 0.0f,
-  -0.5f, -0.5f, -0.5f, 0, 0,-1, 1.0f, 0.0f,
-  -0.5f, 0.5f, -0.5f, 0, 0,-1, 1.0f, 1.0f,
-  0.5f, -0.5f, -0.5f, 0, 0,-1, 0.0f, 0.0f,
-  -0.5f, 0.5f, -0.5f, 0, 0,-1, 1.0f, 1.0f,
-  0.5f, 0.5f, -0.5f, 0, 0,-1, 0.0f, 1.0f,
-
-  // front face (+Z) CCW
-  -0.5f, -0.5f, 0.5f, 0, 0, 1, 0.0f, 0.0f,
-  0.5f, -0.5f, 0.5f, 0, 0, 1, 1.0f, 0.0f,
-  0.5f, 0.5f, 0.5f, 0, 0, 1, 1.0f, 1.0f,
-  -0.5f, -0.5f, 0.5f, 0, 0, 1, 0.0f, 0.0f,
-  0.5f, 0.5f, 0.5f, 0, 0, 1, 1.0f, 1.0f,
-  -0.5f, 0.5f, 0.5f, 0, 0, 1, 0.0f, 1.0f,
-
-  // left face (−X) CCW
-  -0.5f, -0.5f, 0.5f, -1, 0, 0, 1.0f, 0.0f,
-  -0.5f, 0.5f, 0.5f, -1, 0, 0, 1.0f, 1.0f,
-  -0.5f, -0.5f, -0.5f, -1, 0, 0, 0.0f, 0.0f,
-  -0.5f, 0.5f, 0.5f, -1, 0, 0, 1.0f, 1.0f,
-  -0.5f, 0.5f, -0.5f, -1, 0, 0, 0.0f, 1.0f,
-  -0.5f, -0.5f, -0.5f, -1, 0, 0, 0.0f, 0.0f,
-
-  // right face (+X) CCW
-  0.5f, -0.5f, -0.5f, 1, 0, 0, 0.0f, 0.0f,
-  0.5f, 0.5f, 0.5f, 1, 0, 0, 1.0f, 1.0f,
-  0.5f, -0.5f, 0.5f, 1, 0, 0, 1.0f, 0.0f,
-  0.5f, -0.5f, -0.5f, 1, 0, 0, 0.0f, 0.0f,
-  0.5f, 0.5f, -0.5f, 1, 0, 0, 0.0f, 1.0f,
-  0.5f, 0.5f, 0.5f, 1, 0, 0, 1.0f, 1.0f,
-
-  // bottom face (−Y) CCW
-  -0.5f, -0.5f, -0.5f, 0,-1, 0, 0.0f, 0.0f,
-  0.5f, -0.5f, -0.5f, 0,-1, 0, 1.0f, 0.0f,
-  0.5f, -0.5f, 0.5f, 0,-1, 0, 1.0f, 1.0f,
-  -0.5f, -0.5f, -0.5f, 0,-1, 0, 0.0f, 0.0f,
-  0.5f, -0.5f, 0.5f, 0,-1, 0, 1.0f, 1.0f,
-  -0.5f, -0.5f, 0.5f, 0,-1, 0, 0.0f, 1.0f,
-
-  // top face (+Y) CCW
-  -0.5f, 0.5f, -0.5f, 0, 1, 0, 0.0f, 0.0f,
-  -0.5f, 0.5f, 0.5f, 0, 1, 0, 1.0f, 0.0f,
-  0.5f, 0.5f, 0.5f, 0, 1, 0, 1.0f, 1.0f,
-  -0.5f, 0.5f, -0.5f, 0, 1, 0, 0.0f, 0.0f,
-  0.5f, 0.5f, 0.5f, 0, 1, 0, 1.0f, 1.0f,
-  0.5f, 0.5f, -0.5f, 0, 1, 0, 0.0f, 1.0f,
-};
-
-GLuint cube_vao() {
+GLuint cube_vao(void) {
   int vao, vbo;
 
   glGenVertexArrays(1, (GLuint *)&vao);
@@ -322,7 +120,7 @@ void rgba_to_vec4(int r, int g, int b, int a, vec4* out_color) {
   (*out_color)[3] = a / 255.0f;
 }
 
-struct Entity empty_entity() {
+struct Entity empty_entity(void) {
   struct Entity entity;
   entity.name = "Empty";
   entity.component_count = 0;
@@ -352,7 +150,6 @@ void add_component(
   entity->components[entity->component_count++] = component;
 }
 
-
 void framebuffer_size_callback(
     GLFWwindow* window,
     int width,
@@ -361,7 +158,7 @@ void framebuffer_size_callback(
   struct Context* context =
     (struct Context *)glfwGetWindowUserPointer(window);
 
-  float aspect = (float)width / (float)height;
+  // float aspect = (float)width / (float)height;
 
   (*context->framebuffer_size)[0] = width;
   (*context->framebuffer_size)[1] = height;
@@ -386,7 +183,22 @@ struct Texture load_texture(const char* path) {
       format = GL_RGB;
     else if (texture.channels == 4)
       format = GL_RGBA;
+    else {
+      fprintf(stderr, "Unsupported texture format: %s\n", path);
+      stbi_image_free(data);
+      texture.id = 0;
+      texture.width = 0;
+      texture.height = 0;
+      texture.channels = 0;
+      return texture;
+    }
 
+    printf("Bound texture: %s (ID: %d, %dx%d, %d channels)\n",
+      path, texture.id,
+      texture.width,
+      texture.height,
+      texture.channels
+    );
     glBindTexture(GL_TEXTURE_2D, texture.id);
     glTexImage2D(GL_TEXTURE_2D, 0, format,
       texture.width, texture.height,
@@ -420,6 +232,9 @@ void uniform_material(GLuint program, struct Material material) {
       glGetUniformLocation(program, "material.has_base_map_texture");
 
   if (material.base_map_texture->texture != NULL) {
+    printf("Using base map texture ID: %d\n",
+      material.base_map_texture->texture->id);
+
     GLuint base_map_loc =
         glGetUniformLocation(program, "material.base_map_texture");
     glActiveTexture(GL_TEXTURE0);
@@ -468,7 +283,119 @@ void uniform_material(GLuint program, struct Material material) {
     material.is_preserve_specular_highlights ? GL_TRUE : GL_FALSE);
 }
 
-int main() {
+void uniform_directional_light(
+  GLuint program,
+  int i,
+  struct DirLightData dir_light_data,
+  struct ComponentLight light_comp
+) {
+  char buffer[100];
+  sprintf(buffer, "directional_lights[%d].color", i);
+  GLuint light_color_loc =
+      glGetUniformLocation(program, buffer);
+
+  memset(buffer, 0, sizeof(buffer));
+  sprintf(buffer, "directional_lights[%d].direction", i);
+  GLuint light_direction_loc =
+      glGetUniformLocation(program, buffer);
+
+  memset(buffer, 0, sizeof(buffer));
+  sprintf(buffer, "directional_lights[%d].ambient", i);
+  GLuint light_ambient_loc =
+      glGetUniformLocation(program, buffer);
+
+  memset(buffer, 0, sizeof(buffer));
+  sprintf(buffer, "directional_lights[%d].diffuse", i);
+  GLuint light_diffuse_loc =
+      glGetUniformLocation(program, buffer);
+
+  memset(buffer, 0, sizeof(buffer));
+  sprintf(buffer, "directional_lights[%d].specular", i);
+  GLuint light_specular_loc =
+      glGetUniformLocation(program, buffer);
+
+  memset(buffer, 0, sizeof(buffer));
+  sprintf(buffer, "directional_lights[%d].intensity", i);
+  GLuint light_intensity_loc =
+      glGetUniformLocation(program, buffer);
+
+  glUniform3fv(light_ambient_loc, 1,
+    dir_light_data.ambient);
+  glUniform3fv(light_diffuse_loc, 1,
+    dir_light_data.diffuse);
+  glUniform3fv(light_specular_loc, 1,
+    dir_light_data.specular);
+  glUniform3fv(light_color_loc, 1,
+    light_comp.color);
+  glUniform3fv(light_direction_loc, 1,
+    dir_light_data.direction);
+  glUniform1f(light_intensity_loc, light_comp.intensity);
+}
+
+GLuint load_shader(const char* path, GLenum shader_type) {
+  char* shader_source = NULL;
+  if (read_file(path, &shader_source) != 0)
+    return 0;
+
+  GLuint shader = glCreateShader(shader_type);
+  glShaderSource(shader, 1,
+    (const char* const*)&shader_source, NULL);
+  glCompileShader(shader);
+
+  free(shader_source);
+
+  return shader;
+}
+
+void integrate_entity(
+  struct ComponentTransform* transform,
+  struct ComponentRigidbody* rigidbody,
+  float duration
+) {
+  printf("Position: (%f, %f, %f)\n",
+    transform->position[0],
+    transform->position[1],
+    transform->position[2]);
+
+  if (rigidbody->is_kinematic) return;
+
+  vec3 scaled_velocity;
+  glm_vec3_scale(rigidbody->velocity, duration, scaled_velocity);
+
+  glm_vec3_add(
+    transform->position,
+    scaled_velocity,
+    transform->position
+  );
+
+  vec3 resulting_acc;
+  glm_vec3_copy(rigidbody->acceleration, resulting_acc);
+
+  vec3 scaled_acc;
+  glm_vec3_scale(rigidbody->force_accumulator, 1 / rigidbody->mass, scaled_acc);
+  glm_vec3_add(resulting_acc, scaled_acc, resulting_acc);
+
+  vec3 scaled_resulting_acc;
+  glm_vec3_scale(resulting_acc, duration, scaled_resulting_acc);
+
+  glm_vec3_add(
+    rigidbody->velocity,
+    scaled_resulting_acc,
+    rigidbody->velocity
+  );
+
+  glm_vec3_scale(
+    rigidbody->velocity,
+    powf(rigidbody->linear_damping, duration),
+    rigidbody->velocity
+  );
+
+  glm_vec3_zero(rigidbody->force_accumulator);
+}
+
+int main(void) {
+  float delta_time = 1.0f / FRAME_RATE;
+
   if (!glfwInit()) {
     fprintf(stderr, "Failed to initialize GLFW\n");
     return -1;
@@ -499,33 +426,9 @@ int main() {
   glfwMakeContextCurrent(window);
   gladLoadGL();
 
-  char* vertex_shader_source = NULL;
-  char* lit_frag_source = NULL;
-  char* unlit_frag_source = NULL;
-
-  if (read_file("src/main.vert", &vertex_shader_source) != 0)
-    return -1;
-
-  if (read_file("src/lit.frag", &lit_frag_source) != 0)
-    return -1;
-
-  if (read_file("src/unlit.frag", &unlit_frag_source) != 0)
-    return -1;
-
-  GLuint vertex_shader = glCreateShader(GL_VERTEX_SHADER);
-  glShaderSource(vertex_shader, 1,
-    (const char* const*)&vertex_shader_source, NULL);
-  glCompileShader(vertex_shader);
-
-  GLuint lit_frag_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(lit_frag_shader, 1,
-    (const char* const*)&lit_frag_source, NULL);
-  glCompileShader(lit_frag_shader);
-
-  GLuint unlit_frag_shader = glCreateShader(GL_FRAGMENT_SHADER);
-  glShaderSource(unlit_frag_shader, 1,
-    (const char* const*)&unlit_frag_source, NULL);
-  glCompileShader(unlit_frag_shader);
+  GLuint vertex_shader = load_shader("src/main.vert", GL_VERTEX_SHADER);
+  GLuint lit_frag_shader = load_shader("src/lit.frag", GL_FRAGMENT_SHADER);
+  GLuint unlit_frag_shader = load_shader("src/unlit.frag", GL_FRAGMENT_SHADER);
 
   GLuint lit_program = glCreateProgram();
   glAttachShader(lit_program, vertex_shader);
@@ -540,25 +443,22 @@ int main() {
   glDeleteShader(vertex_shader);
   glDeleteShader(lit_frag_shader);
   glDeleteShader(unlit_frag_shader);
-  free(vertex_shader_source);
-  free(lit_frag_source);
-  free(unlit_frag_source);
 
-  struct Texture box = load_texture("assets/textures/box.jpg");
-  struct Texture knob = load_texture("assets/textures/knob.png");
+  // struct Texture box = load_texture("assets/textures/box.jpg");
+  // struct Texture knob = load_texture("assets/textures/knob.png");
 
   struct Material mat1 = {
     .material_shader = MS_LIT,
-    .surface_type = MST_TRANSPARENT,
+    .surface_type = MST_OPAQUE,
     .render_face = MRF_FRONT,
     .is_preserve_specular_highlights = GL_TRUE,
     .is_alpha_clipping = GL_FALSE,
 
     .base_map_texture = &(struct ColoredTexture){
-      .texture = &knob,
+      .texture = NULL,
       .color = {0.0f, 1.0f, 0.0f, 1.0f}
     },
-    .specular_map = {0.0f, 0.0f, 1.0f},
+    .specular_map = {0.0f, 0.0f, 0.0f},
     .smoothness = 0.25,
   };
 
@@ -573,7 +473,8 @@ int main() {
       .texture = NULL,
     },
   };
-  rgba_to_vec4(255, 0, 0, 255, &mat2.base_map_texture->color);
+  rgba_to_vec4(255, 0, 0, 255,
+               &mat2.base_map_texture->color);
 
   struct Entity cube = empty_entity();
   cube.name = "Cube";
@@ -584,17 +485,17 @@ int main() {
   add_component(&cube, (struct Component){
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentTransform){
+    .data.transform = &(struct ComponentTransform){
       .position = {0.0f, 0.0f, 0.0f},
-      .rotation = {glm_rad(45.0f), 0.0f, 0.0f},
-      .scale = {1.0f, 1.0f, 1.0f},
+      .rotation = {0.0f, 0.0f, 0.0f},
+      .scale = {5.0f, 1.0f, 5.0f},
     },
   });
 
   add_component(&cube, (struct Component){
     .kind = CK_MESH_FILTER,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentMeshFilter){
+    .data.mesh_filter = &(struct ComponentMeshFilter){
       .mesh_kind = MFK_CUBE,
       .vao = cube_vao(),
       .vertex_count = 36,
@@ -604,7 +505,7 @@ int main() {
   add_component(&cube, (struct Component){
     .kind = CK_MESH_RENDERER,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentMeshRenderer){
+    .data.mesh_renderer = &(struct ComponentMeshRenderer){
       .materials = &cube_materials,
       .material_count = 1,
     },
@@ -619,8 +520,8 @@ int main() {
   add_component(&cube2, (struct Component){
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentTransform){
-      .position = {2.0f, 0.0f, 2.0f},
+    .data.transform = &(struct ComponentTransform){
+      .position = {0.0f, 4.0f, 0.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
@@ -629,7 +530,7 @@ int main() {
   add_component(&cube2, (struct Component){
     .kind = CK_MESH_FILTER,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentMeshFilter){
+    .data.mesh_filter = &(struct ComponentMeshFilter){
       .mesh_kind = MFK_CUBE,
       .vao = cube_vao(),
       .vertex_count = 36,
@@ -639,11 +540,27 @@ int main() {
   add_component(&cube2, (struct Component){
     .kind = CK_MESH_RENDERER,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentMeshRenderer){
+    .data.mesh_renderer = &(struct ComponentMeshRenderer){
       .materials = &cube2_materials,
       .material_count = 1,
     },
   });
+
+  struct Component rigidbody = {
+    .kind = CK_RIGIDBODY,
+    .is_enabled = GL_TRUE,
+    .data.rigidbody = &(struct ComponentRigidbody){
+      .mass = 1.0f,
+      .is_kinematic = GL_FALSE,
+      .linear_damping = 1.0f,
+      .force_generators = (struct ForceGenerator[]){GRAVITY_GENERATOR},
+      .force_generator_count = 1,
+    },
+  };
+  glm_vec3_copy((float*)GRAVITY,
+    rigidbody.data.rigidbody->force_accumulator);
+
+  add_component(&cube2, rigidbody);
 
   vec3 ambient_color = {0.0f, 0.0f, 1.0f};
 
@@ -652,7 +569,7 @@ int main() {
   add_component(&light, (struct Component){
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentTransform){
+    .data.transform = &(struct ComponentTransform){
       .position = {0.0f, 100.0f, -50.0f},
       .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
@@ -662,7 +579,7 @@ int main() {
   add_component(&light, (struct Component){
     .kind = CK_LIGHT,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentLight){
+    .data.light = &(struct ComponentLight){
       .light_kind = LK_DIRECTIONAL,
       .light_data.dir_light = {
         .direction = {0.0f, 0.0f, 1.0f},
@@ -680,7 +597,7 @@ int main() {
   add_component(&camera, (struct Component){
     .kind = CK_CAMERA,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentCamera){
+    .data.camera = &(struct ComponentCamera){
       .fovy = PERSP_FOV,
       .near = PERSP_NEAR,
       .far = PERSP_FAR,
@@ -695,9 +612,9 @@ int main() {
   add_component(&camera, (struct Component){
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
-    .data = &(struct ComponentTransform){
-      .position = {4.0f, 4.0f, -4.0f},
-      .rotation = {glm_rad(45.0f), 0.0f, glm_rad(-45.0f)},
+    .data.transform = &(struct ComponentTransform){
+      .position = {0.0f, 2.0f, -10.0f},
+      .rotation = {0.0f, 0.0f, 0.0f},
       .scale = {1.0f, 1.0f, 1.0f},
     },
   });
@@ -706,8 +623,8 @@ int main() {
   size_t entity_count = sizeof(entities) / sizeof(entities[0]);
 
   float aspect = (float)WIDTH / (float)HEIGHT;
-  float near = 0.1f;
-  float far = 100.0f;
+  // float near = 0.1f;
+  // float far = 100.0f;
 
   mat4 view_matrix;
   mat4 projection;
@@ -749,16 +666,19 @@ int main() {
       camera_comp = get_component_by_kind(&entity, CK_CAMERA)
     ) != NULL) {
       cam_transform =
-          (struct ComponentTransform *)get_component_by_kind(
+          get_component_by_kind(
               &entity, CK_TRANSFORM)
-              ->data;
+              ->data.transform;
 
-      camera_data = (struct ComponentCamera *)camera_comp->data;
+      camera_data = camera_comp->data.camera;
       break;
     }
   }
 
   vec3 previous_rot = {0.0f, 0.0f, 1.0f};
+
+  int is_playing = 0;
+
   while (!glfwWindowShouldClose(window)) {
     float width = framebuffer_size[0];
     float height = framebuffer_size[1];
@@ -770,11 +690,11 @@ int main() {
       glm_vec3_copy(front, rotated_front);
 
       glm_vec3_rotate(rotated_front,
-        cam_transform->rotation[0], (vec3){1.0f, 0.0f, 0.0f});
+        cam_transform->rotation[0], (float*)POS_X_AXIS);
       glm_vec3_rotate(rotated_front,
-        cam_transform->rotation[1], (vec3){0.0f, 1.0f, 0.0f});
+        cam_transform->rotation[1], (float*)POS_Y_AXIS);
       glm_vec3_rotate(rotated_front,
-        cam_transform->rotation[2], (vec3){0.0f, 0.0f, 1.0f});
+        cam_transform->rotation[2], (float*)POS_Z_AXIS);
 
       update_camera_vectors(rotated_front, right, up);
       glm_vec3_copy(rotated_front, front);
@@ -819,11 +739,10 @@ int main() {
     glm_perspective(camera_data->fovy, aspect,
       camera_data->near, camera_data->far, projection);
 
-    // glUseProgram(shader_program);
-
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, 1);
 
+#if DEBUG
     vec3 translation = {0.0f, 0.0f, 0.0f};
     if (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
       glm_vec3_muladds(up, -0.1f, translation);
@@ -843,9 +762,14 @@ int main() {
     if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
       glm_vec3_muladds(right, 0.1f, translation);
 
+    if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS)
+      is_playing = !is_playing;
+
     glm_vec3_add(cam_transform->position, translation,
       cam_transform->position);
+#endif
 
+    // begin render pipeline
     int light_count = 0;
     struct ComponentLight dir_lights[10];
 
@@ -856,13 +780,10 @@ int main() {
       if ((
         light = get_component_by_kind(&entity, CK_LIGHT)
       ) != NULL) {
-        struct ComponentLight *light_comp =
-            (struct ComponentLight *)light->data;
+        struct ComponentLight *light_comp = light->data.light;
 
         if (light_comp->light_kind == LK_DIRECTIONAL) {
-          // struct DirLightData dir_light_data = light_comp->light_data.dir_light;
-          dir_lights[light_count] = *light_comp;
-          light_count++;
+          dir_lights[light_count++] = *light_comp;
         }
       }
     }
@@ -876,19 +797,17 @@ int main() {
         mesh_r = get_component_by_kind(&entity, CK_MESH_RENDERER)
       ) != NULL) {
         struct ComponentMeshRenderer *mesh_renderer =
-            (struct ComponentMeshRenderer *)mesh_r->data;
+            mesh_r->data.mesh_renderer;
         if (!mesh_r->is_enabled) continue;
 
         struct ComponentMeshFilter* mesh_filter =
-            (struct ComponentMeshFilter *)get_component_by_kind(
-                &entity, CK_MESH_FILTER)
-                ->data;
+            get_component_by_kind(
+                &entity, CK_MESH_FILTER)->data.mesh_filter;
         if (mesh_filter == NULL) continue;
 
         struct ComponentTransform *transform =
-            (struct ComponentTransform *)get_component_by_kind(
-                &entity, CK_TRANSFORM)
-                ->data;
+            get_component_by_kind(
+                &entity, CK_TRANSFORM)->data.transform;
         if (transform == NULL) continue;
 
         struct Material* materials = *mesh_renderer->materials;
@@ -902,7 +821,7 @@ int main() {
         glm_rotate_z(model, transform->rotation[2], model);
         glm_scale(model, transform->scale);
 
-        for (int i = 0; i < mesh_renderer->material_count; i++) {
+        for (unsigned int i = 0; i < mesh_renderer->material_count; i++) {
           struct Material material = materials[i];
 
           GLuint program;
@@ -912,51 +831,14 @@ int main() {
 
             for (int i = 0; i < light_count; i++) {
               struct ComponentLight light_comp = dir_lights[i];
-
               struct DirLightData dir_light_data = light_comp.light_data.dir_light;
 
-              char buffer[100];
-              sprintf(buffer, "directional_lights[%d].color", i);
-
-              GLuint light_color_loc =
-                  glGetUniformLocation(program, buffer);
-
-              memset(buffer, 0, sizeof(buffer));
-              sprintf(buffer, "directional_lights[%d].direction", i);
-              GLuint light_direction_loc =
-                  glGetUniformLocation(program, buffer);
-
-              memset(buffer, 0, sizeof(buffer));
-              sprintf(buffer, "directional_lights[%d].ambient", i);
-              GLuint light_ambient_loc =
-                  glGetUniformLocation(program, buffer);
-
-              memset(buffer, 0, sizeof(buffer));
-              sprintf(buffer, "directional_lights[%d].diffuse", i);
-              GLuint light_diffuse_loc =
-                  glGetUniformLocation(program, buffer);
-
-              memset(buffer, 0, sizeof(buffer));
-              sprintf(buffer, "directional_lights[%d].specular", i);
-              GLuint light_specular_loc =
-                  glGetUniformLocation(program, buffer);
-
-              memset(buffer, 0, sizeof(buffer));
-              sprintf(buffer, "directional_lights[%d].intensity", i);
-              GLuint light_intensity_loc =
-                  glGetUniformLocation(program, buffer);
-
-              glUniform3fv(light_ambient_loc, 1,
-                dir_light_data.ambient);
-              glUniform3fv(light_diffuse_loc, 1,
-                dir_light_data.diffuse);
-              glUniform3fv(light_specular_loc, 1,
-                dir_light_data.specular);
-              glUniform3fv(light_color_loc, 1,
-                light_comp.color);
-              glUniform3fv(light_direction_loc, 1,
-                dir_light_data.direction);
-              glUniform1f(light_intensity_loc, light_comp.intensity);
+              uniform_directional_light(
+                program,
+                i,
+                dir_light_data,
+                light_comp
+              );
             }
 
           } else {
@@ -1032,11 +914,42 @@ int main() {
           mesh_filter->vertex_count);
       }
     }
+    // end render pipeline
+    // begin physics engine
+    for (size_t i = 0; i < entity_count; i++) {
+      struct Entity* entity = &entities[i];
+
+      struct Component *rigidbody_comp = NULL;
+      struct Component *transform_comp = NULL;
+
+      if ((
+        rigidbody_comp = get_component_by_kind(entity, CK_RIGIDBODY)
+      ) != NULL && (
+        transform_comp = get_component_by_kind(entity, CK_TRANSFORM)
+      ) != NULL) {
+        struct ComponentRigidbody* rigidbody =
+            rigidbody_comp->data.rigidbody;
+        struct ComponentTransform* transform =
+            transform_comp->data.transform;
+
+        if (!rigidbody->is_kinematic) {
+          for (int i = 0; i < rigidbody->force_generator_count; i++) {
+            struct ForceGenerator* fg =
+                &rigidbody->force_generators[i];
+            fg->update_force(rigidbody, delta_time * is_playing, fg->generator_data);
+          }
+
+          integrate_entity(transform, rigidbody, delta_time * is_playing);
+        }
+      }
+    }
+
+    // end physics engine
 
     glfwSwapBuffers(window);
     glfwPollEvents();
 
-    glfwWaitEventsTimeout(1.0 / 60.0);
+    glfwWaitEventsTimeout(delta_time);
   }
 
   free(framebuffer_size);
