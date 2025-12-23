@@ -39,48 +39,6 @@ struct Component* get_component_by_kind(
   return NULL;
 }
 
-GLuint cube_vao(void) {
-  int vao, vbo;
-
-  glGenVertexArrays(1, (GLuint *)&vao);
-  glGenBuffers(1, (GLuint *)&vbo);
-
-  glBindVertexArray(vao);
-
-  glBindBuffer(GL_ARRAY_BUFFER, vbo);
-  glBufferData(
-    GL_ARRAY_BUFFER,
-    sizeof(CUBE_VERTICES), CUBE_VERTICES,
-    GL_STATIC_DRAW
-  );
-
-  glVertexAttribPointer(
-    0, 3, GL_FLOAT,
-    GL_FALSE, 8 * sizeof(float),
-    (void *)0
-  );
-  glEnableVertexAttribArray(0);
-
-  glVertexAttribPointer(
-    1, 3, GL_FLOAT,
-    GL_FALSE, 8 * sizeof(float),
-    (void *)(3 * sizeof(float))
-  );
-  glEnableVertexAttribArray(1);
-
-  glVertexAttribPointer(
-    2, 2, GL_FLOAT,
-    GL_FALSE, 8 * sizeof(float),
-    (void *)(6 * sizeof(float))
-  );
-  glEnableVertexAttribArray(2);
-
-  glBindBuffer(GL_ARRAY_BUFFER, 0);
-  glBindVertexArray(0);
-
-  return vao;
-}
-
 int read_file(const char* path, char** buffer) {
   FILE* file = fopen(path, "r");
   if (!file) {
@@ -447,6 +405,8 @@ int main(void) {
   // struct Texture box = load_texture("assets/textures/box.jpg");
   // struct Texture knob = load_texture("assets/textures/knob.png");
 
+  const GLuint CUBE_VAO = cube_vao();
+
   struct Material mat1 = {
     .material_shader = MS_LIT,
     .surface_type = MST_OPAQUE,
@@ -497,8 +457,8 @@ int main(void) {
     .is_enabled = GL_TRUE,
     .data.mesh_filter = &(struct ComponentMeshFilter){
       .mesh_kind = MFK_CUBE,
-      .vao = cube_vao(),
-      .vertex_count = 36,
+      .vao = CUBE_VAO,
+      .vertex_count = CUBE_VERTEX_COUNT,
     },
   });
 
@@ -532,8 +492,8 @@ int main(void) {
     .is_enabled = GL_TRUE,
     .data.mesh_filter = &(struct ComponentMeshFilter){
       .mesh_kind = MFK_CUBE,
-      .vao = cube_vao(),
-      .vertex_count = 36,
+      .vao = CUBE_VAO,
+      .vertex_count = CUBE_VERTEX_COUNT
     },
   });
 
@@ -557,7 +517,7 @@ int main(void) {
       .force_generator_count = 1,
     },
   };
-  glm_vec3_copy((float*)GRAVITY,
+  glm_vec3_copy((float*)GRAVITY_VEC,
     rigidbody.data.rigidbody->force_accumulator);
 
   add_component(&cube2, rigidbody);
@@ -735,7 +695,7 @@ int main(void) {
       camera_data->viewport_rect[3] * height);
 
 
-    aspect = (vp_w) / (vp_h);
+    aspect = vp_w / vp_h;
     glm_perspective(camera_data->fovy, aspect,
       camera_data->near, camera_data->far, projection);
 
