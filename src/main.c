@@ -310,11 +310,6 @@ void integrate_entity(
   struct ComponentRigidbody* rigidbody,
   float duration
 ) {
-  printf("Position: (%f, %f, %f)\n",
-    transform->position[0],
-    transform->position[1],
-    transform->position[2]);
-
   if (rigidbody->is_kinematic) return;
 
   vec3 scaled_velocity;
@@ -391,6 +386,7 @@ void box_and_box_collision(
     float min_dy = (dy1 < dy2) ? dy1 : dy2;
     float min_dz = (dz1 < dz2) ? dz1 : dz2;
 
+    glm_vec3_zero(out_manifold->normal);
     if (min_dx <= min_dy && min_dx <= min_dz) {
       out_manifold->penetration_depth = min_dx;
       out_manifold->normal[0] = (dx1 < dx2) ? -1.0f : 1.0f;
@@ -405,12 +401,6 @@ void box_and_box_collision(
     }
 
     glm_vec3_normalize(out_manifold->normal);
-    printf("Penetration Depth: %f\n",
-      out_manifold->penetration_depth);
-    printf("Collision Normal: (%f, %f, %f)\n",
-      out_manifold->normal[0],
-      out_manifold->normal[1],
-      out_manifold->normal[2]);
   }
 }
 
@@ -1068,6 +1058,20 @@ int main(void) {
                     -manifold.penetration_depth,
                     transform->position
                   );
+
+                  if (glm_vec3_dot(rigidbody->velocity, manifold.normal) > 0.0f) {
+                    vec3 vel_along_normal;
+                    glm_vec3_scale(manifold.normal,
+                      glm_vec3_dot(rigidbody->velocity, manifold.normal),
+                      vel_along_normal);
+
+                    vec3 new_velocity;
+                    glm_vec3_sub(rigidbody->velocity,
+                      vel_along_normal,
+                      new_velocity);
+
+                    glm_vec3_copy(new_velocity, rigidbody->velocity);
+                  }
                 }
               }
             }

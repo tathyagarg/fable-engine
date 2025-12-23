@@ -16,6 +16,9 @@ static const vec3 WORLD_FORWARD = {0.0f, 0.0f, 1.0f};
 
 static const vec3 GRAVITY_VEC = {0.0f, -GRAVITY, 0.0f};
 
+#define DISPLAY_VEC3(vec) \
+  printf("%s: (%f, %f, %f)\n", #vec, (vec)[0], (vec)[1], (vec)[2]);
+
 /*
  * Context struct holds global rendering context information
  * This data is passed to GLFW window user pointer for access in callbacks
