@@ -56,6 +56,7 @@ struct Component {
     CK_LIGHT,
     CK_CAMERA,
     CK_RIGIDBODY,
+    CK_BOX_COLLIDER,
   } kind;
 
   GLboolean is_enabled;
@@ -173,6 +174,11 @@ struct Component {
       struct ForceGenerator* force_generators;
       int force_generator_count;
     }* rigidbody;
+
+    struct ComponentBoxCollider {
+      vec3 center;
+      vec3 size;
+    }* box_collider;
   } data;
 };
 
@@ -334,3 +340,10 @@ GLuint cube_vao(void) {
 
   return vao;
 }
+
+struct CollisionManifold {
+  GLboolean is_colliding;
+
+  vec3 normal;
+  float penetration_depth;
+};

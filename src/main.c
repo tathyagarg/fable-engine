@@ -351,6 +351,69 @@ void integrate_entity(
   glm_vec3_zero(rigidbody->force_accumulator);
 }
 
+void box_and_box_collision(
+  struct ComponentBoxCollider* box_a,
+  struct ComponentTransform* transform_a,
+  struct ComponentBoxCollider* box_b,
+  struct ComponentTransform* transform_b,
+  struct CollisionManifold* out_manifold
+) {
+  vec3 a_min, a_max;
+  vec3 b_min, b_max;
+
+  glm_vec3_add(transform_a->position, box_a->center, a_min);
+  glm_vec3_muladds(transform_a->scale, 0.5f, a_min);
+  glm_vec3_copy(a_min, a_max);
+  glm_vec3_muladds(box_a->size, -0.5f, a_min);
+  glm_vec3_muladds(box_a->size, 0.5f, a_max);
+
+  glm_vec3_add(transform_b->position, box_b->center, b_min);
+  glm_vec3_muladds(transform_b->scale, 0.5f, b_min);
+  glm_vec3_copy(b_min, b_max);
+  glm_vec3_muladds(box_b->size, -0.5f, b_min);
+  glm_vec3_muladds(box_b->size, 0.5f, b_max);
+
+  if (a_min[0] > b_max[0] || a_max[0] < b_min[0] ||
+      a_min[1] > b_max[1] || a_max[1] < b_min[1] ||
+      a_min[2] > b_max[2] || a_max[2] < b_min[2]) {
+    out_manifold->is_colliding = GL_FALSE;
+  } else {
+    out_manifold->is_colliding = GL_TRUE;
+
+    float dx1 = b_max[0] - a_min[0];
+    float dx2 = a_max[0] - b_min[0];
+    float dy1 = b_max[1] - a_min[1];
+    float dy2 = a_max[1] - b_min[1];
+    float dz1 = b_max[2] - a_min[2];
+    float dz2 = a_max[2] - b_min[2];
+
+    float min_dx = (dx1 < dx2) ? dx1 : dx2;
+    float min_dy = (dy1 < dy2) ? dy1 : dy2;
+    float min_dz = (dz1 < dz2) ? dz1 : dz2;
+
+    if (min_dx <= min_dy && min_dx <= min_dz) {
+      out_manifold->penetration_depth = min_dx;
+      out_manifold->normal[0] = (dx1 < dx2) ? -1.0f : 1.0f;
+    }
+    else if (min_dy <= min_dx && min_dy <= min_dz) {
+      out_manifold->penetration_depth = min_dy;
+      out_manifold->normal[1] = (dy1 < dy2) ? -1.0f : 1.0f;
+    }
+    else {
+      out_manifold->penetration_depth = min_dz;
+      out_manifold->normal[2] = (dz1 < dz2) ? -1.0f : 1.0f;
+    }
+
+    glm_vec3_normalize(out_manifold->normal);
+    printf("Penetration Depth: %f\n",
+      out_manifold->penetration_depth);
+    printf("Collision Normal: (%f, %f, %f)\n",
+      out_manifold->normal[0],
+      out_manifold->normal[1],
+      out_manifold->normal[2]);
+  }
+}
+
 int main(void) {
   float delta_time = 1.0f / FRAME_RATE;
 
@@ -387,6 +450,7 @@ int main(void) {
   GLuint vertex_shader = load_shader("src/main.vert", GL_VERTEX_SHADER);
   GLuint lit_frag_shader = load_shader("src/lit.frag", GL_FRAGMENT_SHADER);
   GLuint unlit_frag_shader = load_shader("src/unlit.frag", GL_FRAGMENT_SHADER);
+  GLuint collider_frag_shader = load_shader("src/collider.frag", GL_FRAGMENT_SHADER);
 
   GLuint lit_program = glCreateProgram();
   glAttachShader(lit_program, vertex_shader);
@@ -398,9 +462,15 @@ int main(void) {
   glAttachShader(unlit_program, unlit_frag_shader);
   glLinkProgram(unlit_program);
 
+  GLuint collider_program = glCreateProgram();
+  glAttachShader(collider_program, vertex_shader);
+  glAttachShader(collider_program, collider_frag_shader);
+  glLinkProgram(collider_program);
+
   glDeleteShader(vertex_shader);
   glDeleteShader(lit_frag_shader);
   glDeleteShader(unlit_frag_shader);
+  glDeleteShader(collider_frag_shader);
 
   // struct Texture box = load_texture("assets/textures/box.jpg");
   // struct Texture knob = load_texture("assets/textures/knob.png");
@@ -436,13 +506,13 @@ int main(void) {
   rgba_to_vec4(255, 0, 0, 255,
                &mat2.base_map_texture->color);
 
-  struct Entity cube = empty_entity();
-  cube.name = "Cube";
+  struct Entity platform = empty_entity();
+  platform.name = "Platform";
 
-  struct Material* cube_materials = malloc(1 * sizeof(struct Material));
-  cube_materials[0] = mat1;
+  struct Material* platform_mats = malloc(1 * sizeof(struct Material));
+  platform_mats[0] = mat1;
 
-  add_component(&cube, (struct Component){
+  add_component(&platform, (struct Component){
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
     .data.transform = &(struct ComponentTransform){
@@ -452,7 +522,7 @@ int main(void) {
     },
   });
 
-  add_component(&cube, (struct Component){
+  add_component(&platform, (struct Component){
     .kind = CK_MESH_FILTER,
     .is_enabled = GL_TRUE,
     .data.mesh_filter = &(struct ComponentMeshFilter){
@@ -462,22 +532,31 @@ int main(void) {
     },
   });
 
-  add_component(&cube, (struct Component){
+  add_component(&platform, (struct Component){
     .kind = CK_MESH_RENDERER,
     .is_enabled = GL_TRUE,
     .data.mesh_renderer = &(struct ComponentMeshRenderer){
-      .materials = &cube_materials,
+      .materials = &platform_mats,
       .material_count = 1,
     },
   });
 
-  struct Entity cube2 = empty_entity();
-  cube2.name = "Cube2";
+  add_component(&platform, (struct Component){
+    .kind = CK_BOX_COLLIDER,
+    .is_enabled = GL_TRUE,
+    .data.box_collider = &(struct ComponentBoxCollider){
+      .size = {5.0f, 1.0f, 5.0f},
+      .center = {0.0f, 0.0f, 0.0f},
+    },
+  });
 
-  struct Material* cube2_materials = malloc(1 * sizeof(struct Material));
-  cube2_materials[0] = mat2;
+  struct Entity cube = empty_entity();
+  cube.name = "Cube";
 
-  add_component(&cube2, (struct Component){
+  struct Material* cube_mats = malloc(1 * sizeof(struct Material));
+  cube_mats[0] = mat2;
+
+  add_component(&cube, (struct Component){
     .kind = CK_TRANSFORM,
     .is_enabled = GL_TRUE,
     .data.transform = &(struct ComponentTransform){
@@ -487,7 +566,7 @@ int main(void) {
     },
   });
 
-  add_component(&cube2, (struct Component){
+  add_component(&cube, (struct Component){
     .kind = CK_MESH_FILTER,
     .is_enabled = GL_TRUE,
     .data.mesh_filter = &(struct ComponentMeshFilter){
@@ -497,11 +576,11 @@ int main(void) {
     },
   });
 
-  add_component(&cube2, (struct Component){
+  add_component(&cube, (struct Component){
     .kind = CK_MESH_RENDERER,
     .is_enabled = GL_TRUE,
     .data.mesh_renderer = &(struct ComponentMeshRenderer){
-      .materials = &cube2_materials,
+      .materials = &cube_mats,
       .material_count = 1,
     },
   });
@@ -520,7 +599,16 @@ int main(void) {
   glm_vec3_copy((float*)GRAVITY_VEC,
     rigidbody.data.rigidbody->force_accumulator);
 
-  add_component(&cube2, rigidbody);
+  add_component(&cube, rigidbody);
+
+  add_component(&cube, (struct Component){
+    .kind = CK_BOX_COLLIDER,
+    .is_enabled = GL_TRUE,
+    .data.box_collider = &(struct ComponentBoxCollider){
+      .size = {2.0f, 2.0f, 2.0f},
+      .center = {-1.0f, -1.0f, -1.0f},
+    },
+  });
 
   vec3 ambient_color = {0.0f, 0.0f, 1.0f};
 
@@ -579,7 +667,7 @@ int main(void) {
     },
   });
 
-  struct Entity entities[] = {cube2, cube, light, camera};
+  struct Entity entities[] = {cube, platform, light, camera};
   size_t entity_count = sizeof(entities) / sizeof(entities[0]);
 
   float aspect = (float)WIDTH / (float)HEIGHT;
@@ -637,7 +725,7 @@ int main(void) {
 
   vec3 previous_rot = {0.0f, 0.0f, 1.0f};
 
-  int is_playing = 0;
+  int is_playing = 1;
 
   while (!glfwWindowShouldClose(window)) {
     float width = framebuffer_size[0];
@@ -872,6 +960,47 @@ int main(void) {
         glBindVertexArray(mesh_filter->vao);
         glDrawArrays(GL_TRIANGLES, 0,
           mesh_filter->vertex_count);
+
+#if DEBUG
+        struct Component* box_collider_comp =
+            get_component_by_kind(
+                &entity, CK_BOX_COLLIDER);
+
+        if (box_collider_comp != NULL) {
+          struct ComponentBoxCollider* box_collider =
+              box_collider_comp->data.box_collider;
+
+          glUseProgram(collider_program);
+
+          mat4 collider_model;
+          glm_mat4_identity(collider_model);
+          glm_translate(collider_model, transform->position);
+          glm_translate(collider_model, box_collider->center);
+          glm_rotate_x(collider_model, transform->rotation[0], collider_model);
+          glm_rotate_y(collider_model, transform->rotation[1], collider_model);
+          glm_rotate_z(collider_model, transform->rotation[2], collider_model);
+          glm_scale(collider_model, box_collider->size);
+
+          GLuint model_loc =
+            glGetUniformLocation(collider_program, "model");
+          glUniformMatrix4fv(model_loc, 1,
+            GL_FALSE, (float *)collider_model);
+          GLuint proj_loc =
+            glGetUniformLocation(collider_program, "projection");
+          glUniformMatrix4fv(proj_loc, 1,
+            GL_FALSE, (float *)projection);
+          GLuint view_loc =
+            glGetUniformLocation(collider_program, "view");
+          glUniformMatrix4fv(view_loc, 1,
+            GL_FALSE, (float *)view_matrix);
+
+          glBindVertexArray(CUBE_VAO);
+          glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+          glDrawArrays(GL_TRIANGLES, 0,
+            CUBE_VERTEX_COUNT);
+          glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+        }
+#endif
       }
     }
     // end render pipeline
@@ -900,6 +1029,49 @@ int main(void) {
           }
 
           integrate_entity(transform, rigidbody, delta_time * is_playing);
+
+          for (size_t j = 0; j < entity_count; j++) {
+            if (i == j) continue;
+
+            struct Entity* other_entity = &entities[j];
+
+            struct Component* other_transform_comp = NULL;
+
+            if ((
+              other_transform_comp = get_component_by_kind(other_entity, CK_TRANSFORM)
+            ) != NULL) {
+              struct ComponentTransform* other_transform =
+                  other_transform_comp->data.transform;
+
+              struct Component* box_collider_comp =
+                  get_component_by_kind(entity, CK_BOX_COLLIDER);
+              struct Component* other_box_collider_comp =
+                  get_component_by_kind(other_entity, CK_BOX_COLLIDER);
+
+              if (box_collider_comp != NULL && other_box_collider_comp != NULL) {
+                struct ComponentBoxCollider* box_collider =
+                    box_collider_comp->data.box_collider;
+                struct ComponentBoxCollider* other_box_collider =
+                    other_box_collider_comp->data.box_collider;
+
+                struct CollisionManifold manifold;
+                box_and_box_collision(
+                  box_collider,
+                  transform,
+                  other_box_collider,
+                  other_transform,
+                  &manifold
+                );
+                if (manifold.is_colliding) {
+                  glm_vec3_muladds(
+                    manifold.normal,
+                    -manifold.penetration_depth,
+                    transform->position
+                  );
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -913,7 +1085,8 @@ int main(void) {
   }
 
   free(framebuffer_size);
-  free(cube_materials);
+  free(cube_mats);
+  free(platform_mats);
   for (size_t i = 0; i < entity_count; i++) {
     free(entities[i].components);
   }
