@@ -23,7 +23,7 @@ struct Material {
   vec4 base_map;
   vec3 specular_map;
 
-  int is_preserve_specular_highlights;
+  int is_preserve_spec_high;
   int surface_type;
 
   sampler2D base_map_texture;
@@ -97,7 +97,7 @@ void main() {
   // base_map_color = texture(material.base_map_texture, TexCoords);
 
   vec3 reflection = vec3(0.0);
-  if (material.is_preserve_specular_highlights != 0) {
+  if (material.is_preserve_spec_high != 0) {
     reflection = material.specular_map.rgb * 0.25;
   }
 
@@ -124,7 +124,7 @@ void main() {
       lighting += add_lighting;
     }
 
-    if (material.is_preserve_specular_highlights != 0) {
+    if (material.is_preserve_spec_high != 0) {
       vec3 l_reflection = vec3(dot(norm, light_dir)) * light.color;
       l_reflection *= dot(norm, view_dir);
       reflection += l_reflection;

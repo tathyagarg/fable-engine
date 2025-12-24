@@ -19,14 +19,15 @@
 #define PERSP_NEAR 0.1f
 #define PERSP_FAR 100.0f
 
-#define DEBUG 1
+#define DEBUG
+#define SHOW_COLLIDERS
 
 #define FRAME_RATE 60.0f
 
 //  TODO: Load from config file
 #define TITLE "Fable Engine"
 
-struct Component* get_component_by_kind(
+struct Component* get_comp_by_kind(
     struct Entity *entity,
     enum ComponentKind kind
 ) {
@@ -235,10 +236,10 @@ void uniform_material(GLuint program, struct Material material) {
   glUniform1i(surface_type_loc,
     material.surface_type);
 
-  GLuint is_preserve_specular_highlights_loc =
-      glGetUniformLocation(program, "material.is_preserve_specular_highlights");
-  glUniform1i(is_preserve_specular_highlights_loc,
-    material.is_preserve_specular_highlights ? GL_TRUE : GL_FALSE);
+  GLuint is_preserve_spec_high_loc =
+      glGetUniformLocation(program, "material.is_preserve_spec_high");
+  glUniform1i(is_preserve_spec_high_loc,
+    material.is_preserve_specular_highlights);
 }
 
 void uniform_directional_light(
@@ -307,13 +308,13 @@ GLuint load_shader(const char* path, GLenum shader_type) {
 
 void integrate_entity(
   struct ComponentTransform* transform,
-  struct ComponentRigidbody* rigidbody,
+  struct ComponentRigidbody* rb,
   float duration
 ) {
-  if (rigidbody->is_kinematic) return;
+  if (rb->is_kinematic) return;
 
   vec3 scaled_velocity;
-  glm_vec3_scale(rigidbody->velocity, duration, scaled_velocity);
+  glm_vec3_scale(rb->velocity, duration, scaled_velocity);
 
   glm_vec3_add(
     transform->position,
@@ -322,28 +323,91 @@ void integrate_entity(
   );
 
   vec3 resulting_acc;
-  glm_vec3_copy(rigidbody->acceleration, resulting_acc);
+  glm_vec3_copy(rb->acceleration, resulting_acc);
 
   vec3 scaled_acc;
-  glm_vec3_scale(rigidbody->force_accumulator, 1 / rigidbody->mass, scaled_acc);
+  glm_vec3_scale(rb->force_accumulator, 1 / rb->mass, scaled_acc);
   glm_vec3_add(resulting_acc, scaled_acc, resulting_acc);
 
   vec3 scaled_resulting_acc;
   glm_vec3_scale(resulting_acc, duration, scaled_resulting_acc);
 
   glm_vec3_add(
-    rigidbody->velocity,
+    rb->velocity,
     scaled_resulting_acc,
-    rigidbody->velocity
+    rb->velocity
   );
 
   glm_vec3_scale(
-    rigidbody->velocity,
-    powf(rigidbody->linear_damping, duration),
-    rigidbody->velocity
+    rb->velocity,
+    powf(rb->linear_damping, duration),
+    rb->velocity
   );
 
-  glm_vec3_zero(rigidbody->force_accumulator);
+  glm_vec3_zero(rb->force_accumulator);
+}
+
+void get_collider_obb(
+  struct ComponentBoxCollider* box,
+  struct ComponentTransform* transform,
+  vec3 out_corners[8]
+) {
+  mat4 model;
+  glm_mat4_identity(model);
+  glm_translate(model, transform->position);
+  glm_rotate_x(model, transform->rotation[0], model);
+  glm_rotate_y(model, transform->rotation[1], model);
+  glm_rotate_z(model, transform->rotation[2], model);
+
+  vec3 center_translation;
+  glm_vec3_negate_to(box->center, center_translation);
+  glm_translate(model, center_translation);
+
+  for (int i = 0; i < 8; i++) {
+    glm_vec3_zero(out_corners[i]);
+
+    vec4 local_corner = {
+      (i & 1 ? 0.5f : -0.5f) * box->size[0],
+      (i & 2 ? 0.5f : -0.5f) * box->size[1],
+      (i & 4 ? 0.5f : -0.5f) * box->size[2],
+      1.0f
+    };
+
+    vec4 rotated_corner;
+    glm_mat4_mulv(model, local_corner, rotated_corner);
+    glm_vec3_copy(rotated_corner, out_corners[i]);
+  }
+}
+
+GLboolean overlap_on_axis(
+  vec3 a_corners[8],
+  vec3 b_corners[8],
+  vec3 axis,
+  float* out_penetration_depth
+) {
+  float a_min = FLT_MAX;
+  float a_max = -FLT_MAX;
+  float b_min = FLT_MAX;
+  float b_max = -FLT_MAX;
+
+  for (int i = 0; i < 8; i++) {
+    float a_proj = glm_vec3_dot(a_corners[i], axis);
+    float b_proj = glm_vec3_dot(b_corners[i], axis);
+
+    if (a_proj < a_min) a_min = a_proj;
+    if (a_proj > a_max) a_max = a_proj;
+    if (b_proj < b_min) b_min = b_proj;
+    if (b_proj > b_max) b_max = b_proj;
+  }
+
+  if (a_max < b_min || b_max < a_min) {
+    return GL_FALSE;
+  } else {
+    float overlap1 = a_max - b_min;
+    float overlap2 = b_max - a_min;
+    *out_penetration_depth = (overlap1 < overlap2) ? overlap1 : overlap2;
+    return GL_TRUE;
+  }
 }
 
 void box_and_box_collision(
@@ -353,6 +417,12 @@ void box_and_box_collision(
   struct ComponentTransform* transform_b,
   struct CollisionManifold* out_manifold
 ) {
+#ifdef COLLIDER_TYPE_AABB
+  /*
+   * NOTE:
+   * While I could delete this AABB method in favor of the OBB method,
+   * I want to keep it around just for funsies
+   * */
   vec3 a_min, a_max;
   vec3 b_min, b_max;
 
@@ -402,6 +472,49 @@ void box_and_box_collision(
 
     glm_vec3_normalize(out_manifold->normal);
   }
+#else
+  vec3 a_corners[8];
+  vec3 b_corners[8];
+
+  get_collider_obb(box_a, transform_a, a_corners);
+  get_collider_obb(box_b, transform_b, b_corners);
+
+  vec3 axes[15];
+  glm_vec3_sub(a_corners[1], a_corners[0], axes[0]);
+  glm_vec3_sub(a_corners[2], a_corners[0], axes[1]);
+  glm_vec3_sub(a_corners[4], a_corners[0], axes[2]);
+
+  glm_vec3_sub(b_corners[1], b_corners[0], axes[3]);
+  glm_vec3_sub(b_corners[2], b_corners[0], axes[4]);
+  glm_vec3_sub(b_corners[4], b_corners[0], axes[5]);
+
+  for (int i = 0; i < 3; i++) {
+    for (int j = 3; j < 6; j++) {
+      glm_vec3_cross(axes[i], axes[j], axes[6 + (i * 3) + (j - 3)]);
+    }
+  }
+
+  out_manifold->penetration_depth = FLT_MAX;
+  for (int i = 0; i < 15; i++) {
+    float penetration = 0.0f;
+    if (!overlap_on_axis(
+        a_corners,
+        b_corners,
+        axes[i],
+        &penetration
+      )) {
+      out_manifold->is_colliding = GL_FALSE;
+      return;
+    }
+
+    if (penetration < out_manifold->penetration_depth) {
+      out_manifold->penetration_depth = penetration;
+      glm_vec3_copy(axes[i], out_manifold->normal);
+    }
+  }
+
+  out_manifold->is_colliding = GL_TRUE;
+#endif
 }
 
 int main(void) {
@@ -440,6 +553,7 @@ int main(void) {
   GLuint vertex_shader = load_shader("src/main.vert", GL_VERTEX_SHADER);
   GLuint lit_frag_shader = load_shader("src/lit.frag", GL_FRAGMENT_SHADER);
   GLuint unlit_frag_shader = load_shader("src/unlit.frag", GL_FRAGMENT_SHADER);
+  GLuint collider_vert_shader = load_shader("src/collider.vert", GL_VERTEX_SHADER);
   GLuint collider_frag_shader = load_shader("src/collider.frag", GL_FRAGMENT_SHADER);
 
   GLuint lit_program = glCreateProgram();
@@ -453,13 +567,14 @@ int main(void) {
   glLinkProgram(unlit_program);
 
   GLuint collider_program = glCreateProgram();
-  glAttachShader(collider_program, vertex_shader);
+  glAttachShader(collider_program, collider_vert_shader);
   glAttachShader(collider_program, collider_frag_shader);
   glLinkProgram(collider_program);
 
   glDeleteShader(vertex_shader);
   glDeleteShader(lit_frag_shader);
   glDeleteShader(unlit_frag_shader);
+  glDeleteShader(collider_vert_shader);
   glDeleteShader(collider_frag_shader);
 
   // struct Texture box = load_texture("assets/textures/box.jpg");
@@ -551,7 +666,7 @@ int main(void) {
     .is_enabled = GL_TRUE,
     .data.transform = &(struct ComponentTransform){
       .position = {0.0f, 4.0f, 0.0f},
-      .rotation = {0.0f, 0.0f, 0.0f},
+      .rotation = ROTATION_VEC_DEG(0.0f, 45.0f, 45.0f),
       .scale = {1.0f, 1.0f, 1.0f},
     },
   });
@@ -596,7 +711,7 @@ int main(void) {
     .is_enabled = GL_TRUE,
     .data.box_collider = &(struct ComponentBoxCollider){
       .size = {2.0f, 2.0f, 2.0f},
-      .center = {-1.0f, -1.0f, -1.0f},
+      .center = {0.0f, 0.0f, 0.0f},
     },
   });
 
@@ -701,10 +816,10 @@ int main(void) {
     struct Entity entity = entities[i];
 
     if ((
-      camera_comp = get_component_by_kind(&entity, CK_CAMERA)
+      camera_comp = get_comp_by_kind(&entity, CK_CAMERA)
     ) != NULL) {
       cam_transform =
-          get_component_by_kind(
+          get_comp_by_kind(
               &entity, CK_TRANSFORM)
               ->data.transform;
 
@@ -722,6 +837,7 @@ int main(void) {
     float height = framebuffer_size[1];
 
     if (!glm_vec3_eqv(cam_transform->rotation, previous_rot)) {
+      printf("Camera rotation changed\n");
       glm_vec3_copy(cam_transform->rotation, previous_rot);
 
       vec3 rotated_front;
@@ -780,9 +896,9 @@ int main(void) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, 1);
 
-#if DEBUG
+#ifdef DEBUG
     vec3 translation = {0.0f, 0.0f, 0.0f};
-    if (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
+    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
       glm_vec3_muladds(up, -0.1f, translation);
 
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
@@ -803,6 +919,29 @@ int main(void) {
     if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS)
       is_playing = !is_playing;
 
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+      DISPLAY_VEC3(cam_transform->rotation);
+      glm_vec3_add(cam_transform->rotation,
+        (vec3){glm_rad(0.025f), 0.0f, 0.0f},
+        cam_transform->rotation);
+      DISPLAY_VEC3(cam_transform->rotation);
+    }
+
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
+      glm_vec3_add(cam_transform->rotation,
+        (vec3){-glm_rad(0.025f), 0.0f, 0.0f},
+        cam_transform->rotation);
+
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
+      glm_vec3_add(cam_transform->rotation,
+        (vec3){0.0f, glm_rad(0.025f), 0.0f},
+        cam_transform->rotation);
+
+    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
+      glm_vec3_add(cam_transform->rotation,
+        (vec3){0.0f, -glm_rad(0.025f), 0.0f},
+        cam_transform->rotation);
+
     glm_vec3_add(cam_transform->position, translation,
       cam_transform->position);
 #endif
@@ -816,7 +955,7 @@ int main(void) {
 
       struct Component *light = NULL;
       if ((
-        light = get_component_by_kind(&entity, CK_LIGHT)
+        light = get_comp_by_kind(&entity, CK_LIGHT)
       ) != NULL) {
         struct ComponentLight *light_comp = light->data.light;
 
@@ -832,19 +971,19 @@ int main(void) {
       struct Component *mesh_r = NULL;
 
       if ((
-        mesh_r = get_component_by_kind(&entity, CK_MESH_RENDERER)
+        mesh_r = get_comp_by_kind(&entity, CK_MESH_RENDERER)
       ) != NULL) {
         struct ComponentMeshRenderer *mesh_renderer =
             mesh_r->data.mesh_renderer;
         if (!mesh_r->is_enabled) continue;
 
         struct ComponentMeshFilter* mesh_filter =
-            get_component_by_kind(
+            get_comp_by_kind(
                 &entity, CK_MESH_FILTER)->data.mesh_filter;
         if (mesh_filter == NULL) continue;
 
         struct ComponentTransform *transform =
-            get_component_by_kind(
+            get_comp_by_kind(
                 &entity, CK_TRANSFORM)->data.transform;
         if (transform == NULL) continue;
 
@@ -869,14 +1008,11 @@ int main(void) {
 
             for (int i = 0; i < light_count; i++) {
               struct ComponentLight light_comp = dir_lights[i];
-              struct DirLightData dir_light_data = light_comp.light_data.dir_light;
+              struct DirLightData dir_light_data =
+                light_comp.light_data.dir_light;
 
-              uniform_directional_light(
-                program,
-                i,
-                dir_light_data,
-                light_comp
-              );
+              uniform_directional_light(program, i, dir_light_data,
+                light_comp);
             }
 
           } else {
@@ -951,126 +1087,129 @@ int main(void) {
         glDrawArrays(GL_TRIANGLES, 0,
           mesh_filter->vertex_count);
 
-#if DEBUG
+#ifdef SHOW_COLLIDERS
         struct Component* box_collider_comp =
-            get_component_by_kind(
+            get_comp_by_kind(
                 &entity, CK_BOX_COLLIDER);
 
         if (box_collider_comp != NULL) {
-          struct ComponentBoxCollider* box_collider =
-              box_collider_comp->data.box_collider;
-
           glUseProgram(collider_program);
 
-          mat4 collider_model;
-          glm_mat4_identity(collider_model);
-          glm_translate(collider_model, transform->position);
-          glm_translate(collider_model, box_collider->center);
-          glm_rotate_x(collider_model, transform->rotation[0], collider_model);
-          glm_rotate_y(collider_model, transform->rotation[1], collider_model);
-          glm_rotate_z(collider_model, transform->rotation[2], collider_model);
-          glm_scale(collider_model, box_collider->size);
+          vec3 points[8];
+          get_collider_obb(
+            box_collider_comp->data.box_collider,
+            transform,
+            points
+          );
 
-          GLuint model_loc =
-            glGetUniformLocation(collider_program, "model");
-          glUniformMatrix4fv(model_loc, 1,
-            GL_FALSE, (float *)collider_model);
-          GLuint proj_loc =
-            glGetUniformLocation(collider_program, "projection");
-          glUniformMatrix4fv(proj_loc, 1,
-            GL_FALSE, (float *)projection);
-          GLuint view_loc =
-            glGetUniformLocation(collider_program, "view");
-          glUniformMatrix4fv(view_loc, 1,
-            GL_FALSE, (float *)view_matrix);
+          for (int i = 0; i < 8; i++) {
+            mat4 point_model;
+            glm_mat4_identity(point_model);
+            glm_translate(point_model, points[i]);
+            glm_scale(point_model, (vec3){0.1f, 0.1f, 0.1f});
 
-          glBindVertexArray(CUBE_VAO);
-          glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
-          glDrawArrays(GL_TRIANGLES, 0,
-            CUBE_VERTEX_COUNT);
-          glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            GLuint model_loc =
+              glGetUniformLocation(collider_program, "model");
+            glUniformMatrix4fv(model_loc, 1,
+              GL_FALSE, (float *)point_model);
+            GLuint proj_loc =
+              glGetUniformLocation(collider_program, "projection");
+            glUniformMatrix4fv(proj_loc, 1,
+              GL_FALSE, (float *)projection);
+            GLuint view_loc =
+              glGetUniformLocation(collider_program, "view");
+            glUniformMatrix4fv(view_loc, 1,
+              GL_FALSE, (float *)view_matrix);
+
+            glBindVertexArray(CUBE_VAO);
+            glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
+            glDrawArrays(GL_TRIANGLES, 0,
+              CUBE_VERTEX_COUNT);
+          }
         }
 #endif
       }
     }
     // end render pipeline
     // begin physics engine
-    for (size_t i = 0; i < entity_count; i++) {
-      struct Entity* entity = &entities[i];
+    if (is_playing) {
+      for (size_t i = 0; i < entity_count; i++) {
+        struct Entity* entity = &entities[i];
 
-      struct Component *rigidbody_comp = NULL;
-      struct Component *transform_comp = NULL;
+        struct Component *rigidbody_comp = NULL;
+        struct Component *transform_comp = NULL;
 
-      if ((
-        rigidbody_comp = get_component_by_kind(entity, CK_RIGIDBODY)
-      ) != NULL && (
-        transform_comp = get_component_by_kind(entity, CK_TRANSFORM)
-      ) != NULL) {
-        struct ComponentRigidbody* rigidbody =
-            rigidbody_comp->data.rigidbody;
-        struct ComponentTransform* transform =
-            transform_comp->data.transform;
+        if ((
+          rigidbody_comp = get_comp_by_kind(entity, CK_RIGIDBODY)
+        ) != NULL && (
+          transform_comp = get_comp_by_kind(entity, CK_TRANSFORM)
+        ) != NULL) {
+          struct ComponentRigidbody* rigidbody =
+              rigidbody_comp->data.rigidbody;
+          struct ComponentTransform* transform =
+              transform_comp->data.transform;
 
-        if (!rigidbody->is_kinematic) {
-          for (int i = 0; i < rigidbody->force_generator_count; i++) {
-            struct ForceGenerator* fg =
-                &rigidbody->force_generators[i];
-            fg->update_force(rigidbody, delta_time * is_playing, fg->generator_data);
-          }
+          if (!rigidbody->is_kinematic) {
+            for (int i = 0; i < rigidbody->force_generator_count; i++) {
+              struct ForceGenerator* fg =
+                  &rigidbody->force_generators[i];
+              fg->update_force(rigidbody, delta_time, fg->generator_data);
+            }
 
-          integrate_entity(transform, rigidbody, delta_time * is_playing);
+            integrate_entity(transform, rigidbody, delta_time);
 
-          for (size_t j = 0; j < entity_count; j++) {
-            if (i == j) continue;
+            for (size_t j = 0; j < entity_count; j++) {
+              if (i == j) continue;
 
-            struct Entity* other_entity = &entities[j];
+              struct Entity* entity_b = &entities[j];
 
-            struct Component* other_transform_comp = NULL;
+              struct Component* b_transform_comp = NULL;
 
-            if ((
-              other_transform_comp = get_component_by_kind(other_entity, CK_TRANSFORM)
-            ) != NULL) {
-              struct ComponentTransform* other_transform =
-                  other_transform_comp->data.transform;
+              if ((b_transform_comp =
+                get_comp_by_kind(entity_b, CK_TRANSFORM)
+              ) != NULL) {
+                struct ComponentTransform* b_transform =
+                    b_transform_comp->data.transform;
 
-              struct Component* box_collider_comp =
-                  get_component_by_kind(entity, CK_BOX_COLLIDER);
-              struct Component* other_box_collider_comp =
-                  get_component_by_kind(other_entity, CK_BOX_COLLIDER);
+                struct Component* a_bc_comp =
+                    get_comp_by_kind(entity, CK_BOX_COLLIDER);
+                struct Component* b_bc_comp =
+                    get_comp_by_kind(entity_b, CK_BOX_COLLIDER);
 
-              if (box_collider_comp != NULL && other_box_collider_comp != NULL) {
-                struct ComponentBoxCollider* box_collider =
-                    box_collider_comp->data.box_collider;
-                struct ComponentBoxCollider* other_box_collider =
-                    other_box_collider_comp->data.box_collider;
+                if (a_bc_comp != NULL && b_bc_comp != NULL) {
+                  struct ComponentBoxCollider* a_box_collider =
+                      a_bc_comp->data.box_collider;
+                  struct ComponentBoxCollider* b_box_collider =
+                      b_bc_comp->data.box_collider;
 
-                struct CollisionManifold manifold;
-                box_and_box_collision(
-                  box_collider,
-                  transform,
-                  other_box_collider,
-                  other_transform,
-                  &manifold
-                );
-                if (manifold.is_colliding) {
-                  glm_vec3_muladds(
-                    manifold.normal,
-                    -manifold.penetration_depth,
-                    transform->position
+                  struct CollisionManifold manifold;
+                  box_and_box_collision(
+                    a_box_collider,
+                    transform,
+                    b_box_collider,
+                    b_transform,
+                    &manifold
                   );
+                  if (manifold.is_colliding) {
+                    glm_vec3_muladds(
+                      manifold.normal,
+                      manifold.penetration_depth,
+                      transform->position
+                    );
 
-                  if (glm_vec3_dot(rigidbody->velocity, manifold.normal) > 0.0f) {
-                    vec3 vel_along_normal;
-                    glm_vec3_scale(manifold.normal,
-                      glm_vec3_dot(rigidbody->velocity, manifold.normal),
-                      vel_along_normal);
+                    float speed_along_normal =
+                      glm_vec3_dot(rigidbody->velocity, manifold.normal);
+                    if (speed_along_normal < 0.0f) {
+                      vec3 vel_along_normal;
+                      glm_vec3_scale(manifold.normal, speed_along_normal,
+                        vel_along_normal);
 
-                    vec3 new_velocity;
-                    glm_vec3_sub(rigidbody->velocity,
-                      vel_along_normal,
-                      new_velocity);
+                      vec3 new_velocity;
+                      glm_vec3_sub(rigidbody->velocity, vel_along_normal,
+                        new_velocity);
 
-                    glm_vec3_copy(new_velocity, rigidbody->velocity);
+                      glm_vec3_copy(new_velocity, rigidbody->velocity);
+                    }
                   }
                 }
               }
@@ -1079,7 +1218,6 @@ int main(void) {
         }
       }
     }
-
     // end physics engine
 
     glfwSwapBuffers(window);

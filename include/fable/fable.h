@@ -13,6 +13,7 @@ static const vec3 WORLD_FORWARD = {0.0f, 0.0f, 1.0f};
 #define POS_Z_AXIS WORLD_FORWARD
 
 #define GRAVITY 9.81f
+// #define GRAVITY 0.0f
 
 static const vec3 GRAVITY_VEC = {0.0f, -GRAVITY, 0.0f};
 
@@ -45,7 +46,7 @@ struct Entity {
   unsigned int reserved_components;
 };
 
-#define ROTATION_VEC_DEG(x, y, z) ((vec3){glm_rad(x), glm_rad(y), glm_rad(z)})
+#define ROTATION_VEC_DEG(x, y, z) {glm_rad(x), glm_rad(y), glm_rad(z)}
 
 struct Component {
   /*
