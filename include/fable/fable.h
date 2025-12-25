@@ -173,10 +173,17 @@ struct Component {
       vec3 velocity;
       vec3 acceleration;
 
-      vec3 force_accumulator;
+      vec3 angular_vel;
+      vec3 angular_acc;
+
+      vec3 force_acc;
+      vec3 torque_acc;
 
       struct ForceGenerator* force_generators;
       int force_generator_count;
+
+      struct TorqueGenerator* torque_generators;
+      int torque_generator_count;
     }* rigidbody;
 
     struct ComponentBoxCollider {
@@ -239,6 +246,21 @@ struct ForceGenerator {
   void* generator_data;
 };
 
+struct TorqueGenerator {
+  void (*update_torque)(
+    struct ComponentRigidbody* rigidbody,
+    float delta_time,
+    void* generator_data
+  );
+
+  void* generator_data;
+};
+
+struct BasicTorqueGeneratorData {
+  vec3* contact_point;
+  vec3* force;
+};
+
 void _gravity_generator_update_force(
   struct ComponentRigidbody* rigidbody,
   float delta_time,
@@ -252,12 +274,39 @@ void _gravity_generator_update_force(
   vec3 force;
   glm_vec3_scale(gravity, rigidbody->mass, force);
 
-  glm_vec3_add(rigidbody->force_accumulator, force, rigidbody->force_accumulator);
+  glm_vec3_add(rigidbody->force_acc, force, rigidbody->force_acc);
 }
 
 static const struct ForceGenerator GRAVITY_GENERATOR = (struct ForceGenerator){
   .update_force = &_gravity_generator_update_force,
   .generator_data = (void*)GRAVITY_VEC,
+};
+
+void _basic_torque_generator_update_torque(
+  struct ComponentRigidbody* rigidbody,
+  float delta_time,
+  void* generator_data
+) {
+  (void)delta_time;
+
+  struct BasicTorqueGeneratorData* data =
+    (struct BasicTorqueGeneratorData*)generator_data;
+
+  if (data->contact_point == NULL || data->force == NULL)
+    return;
+
+  vec3 r;
+  glm_vec3_sub(*(data->contact_point), rigidbody->velocity, r);
+
+  vec3 torque;
+  glm_vec3_cross(r, *(data->force), torque);
+
+  glm_vec3_add(rigidbody->torque_acc, torque, rigidbody->torque_acc);
+}
+
+static const struct TorqueGenerator BASIC_TORQUE_GENERATOR = (struct TorqueGenerator){
+  .update_torque = &_basic_torque_generator_update_torque,
+  .generator_data = NULL,
 };
 
 static const unsigned int CUBE_VERTEX_COUNT = 36;
@@ -350,4 +399,6 @@ struct CollisionManifold {
 
   vec3 normal;
   float penetration_depth;
+
+  vec3 contact_point;
 };

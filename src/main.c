@@ -313,38 +313,35 @@ void integrate_entity(
 ) {
   if (rb->is_kinematic) return;
 
-  vec3 scaled_velocity;
-  glm_vec3_scale(rb->velocity, duration, scaled_velocity);
-
-  glm_vec3_add(
-    transform->position,
-    scaled_velocity,
-    transform->position
-  );
+  glm_vec3_muladds(rb->velocity, duration, transform->position);
 
   vec3 resulting_acc;
   glm_vec3_copy(rb->acceleration, resulting_acc);
 
-  vec3 scaled_acc;
-  glm_vec3_scale(rb->force_accumulator, 1 / rb->mass, scaled_acc);
-  glm_vec3_add(resulting_acc, scaled_acc, resulting_acc);
+  glm_vec3_muladds(rb->force_acc, 1 / rb->mass, resulting_acc);
+  glm_vec3_muladds(resulting_acc, duration, rb->velocity);
 
-  vec3 scaled_resulting_acc;
-  glm_vec3_scale(resulting_acc, duration, scaled_resulting_acc);
+  float damping = powf(rb->linear_damping, duration);
+  glm_vec3_scale(rb->velocity, damping, rb->velocity);
 
-  glm_vec3_add(
-    rb->velocity,
-    scaled_resulting_acc,
-    rb->velocity
-  );
+  glm_vec3_zero(rb->force_acc);
 
-  glm_vec3_scale(
-    rb->velocity,
-    powf(rb->linear_damping, duration),
-    rb->velocity
-  );
+  printf("Hi\n");
+  glm_vec3_muladds(rb->angular_vel, duration, transform->rotation);
 
-  glm_vec3_zero(rb->force_accumulator);
+  vec3 resulting_angular_acc;
+  glm_vec3_copy(rb->angular_acc, resulting_angular_acc);
+
+  glm_vec3_muladds(rb->torque_acc, 1 / rb->mass, resulting_angular_acc);
+  glm_vec3_muladds(resulting_angular_acc, duration, rb->angular_vel);
+
+  // TODO: Switch to angular damping
+  damping = powf(rb->linear_damping, duration);
+  glm_vec3_scale(rb->angular_vel, damping, rb->angular_vel);
+
+  DISPLAY_VEC3(rb->angular_vel);
+
+  glm_vec3_zero(rb->torque_acc);
 }
 
 void get_collider_obb(
@@ -494,6 +491,7 @@ void box_and_box_collision(
     }
   }
 
+  out_manifold->is_colliding = GL_TRUE;
   out_manifold->penetration_depth = FLT_MAX;
   for (int i = 0; i < 15; i++) {
     float penetration = 0.0f;
@@ -513,7 +511,31 @@ void box_and_box_collision(
     }
   }
 
-  out_manifold->is_colliding = GL_TRUE;
+  glm_vec3_normalize(out_manifold->normal);
+
+  float best = FLT_MAX;
+  for (int i = 0; i < 8; i++) {
+    float distance = glm_vec3_dot(
+      a_corners[i],
+      out_manifold->normal
+    );
+    if (distance < best) {
+      best = distance;
+      glm_vec3_copy(a_corners[i], out_manifold->contact_point);
+    }
+  }
+
+  vec3 correction;
+  glm_vec3_scale(
+    out_manifold->normal,
+    out_manifold->penetration_depth * 0.5f,
+    correction
+  );
+  glm_vec3_add(
+    out_manifold->contact_point,
+    correction,
+    out_manifold->contact_point
+  );
 #endif
 }
 
@@ -690,7 +712,7 @@ int main(void) {
     },
   });
 
-  struct Component rigidbody = {
+  struct Component rb = {
     .kind = CK_RIGIDBODY,
     .is_enabled = GL_TRUE,
     .data.rigidbody = &(struct ComponentRigidbody){
@@ -699,18 +721,21 @@ int main(void) {
       .linear_damping = 1.0f,
       .force_generators = (struct ForceGenerator[]){GRAVITY_GENERATOR},
       .force_generator_count = 1,
+      .torque_generator_count = 0,
     },
   };
-  glm_vec3_copy((float*)GRAVITY_VEC,
-    rigidbody.data.rigidbody->force_accumulator);
+  rb.data.rigidbody->torque_generators = malloc(
+    rb.data.rigidbody->torque_generator_count *
+    sizeof(struct TorqueGenerator)
+  );
 
-  add_component(&cube, rigidbody);
+  add_component(&cube, rb);
 
   add_component(&cube, (struct Component){
     .kind = CK_BOX_COLLIDER,
     .is_enabled = GL_TRUE,
     .data.box_collider = &(struct ComponentBoxCollider){
-      .size = {2.0f, 2.0f, 2.0f},
+      .size = {1.0f, 1.0f, 1.0f},
       .center = {0.0f, 0.0f, 0.0f},
     },
   });
@@ -898,7 +923,7 @@ int main(void) {
 
 #ifdef DEBUG
     vec3 translation = {0.0f, 0.0f, 0.0f};
-    if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS)
+    if (glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS)
       glm_vec3_muladds(up, -0.1f, translation);
 
     if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS)
@@ -918,29 +943,6 @@ int main(void) {
 
     if (glfwGetKey(window, GLFW_KEY_P) == GLFW_PRESS)
       is_playing = !is_playing;
-
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
-      DISPLAY_VEC3(cam_transform->rotation);
-      glm_vec3_add(cam_transform->rotation,
-        (vec3){glm_rad(0.025f), 0.0f, 0.0f},
-        cam_transform->rotation);
-      DISPLAY_VEC3(cam_transform->rotation);
-    }
-
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)
-      glm_vec3_add(cam_transform->rotation,
-        (vec3){-glm_rad(0.025f), 0.0f, 0.0f},
-        cam_transform->rotation);
-
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)
-      glm_vec3_add(cam_transform->rotation,
-        (vec3){0.0f, glm_rad(0.025f), 0.0f},
-        cam_transform->rotation);
-
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
-      glm_vec3_add(cam_transform->rotation,
-        (vec3){0.0f, -glm_rad(0.025f), 0.0f},
-        cam_transform->rotation);
 
     glm_vec3_add(cam_transform->position, translation,
       cam_transform->position);
@@ -1156,6 +1158,12 @@ int main(void) {
               fg->update_force(rigidbody, delta_time, fg->generator_data);
             }
 
+            for (int i = 0; i < rigidbody->torque_generator_count; i++) {
+              struct TorqueGenerator* tg =
+                  &rigidbody->torque_generators[i];
+              tg->update_torque(rigidbody, delta_time, tg->generator_data);
+            }
+
             integrate_entity(transform, rigidbody, delta_time);
 
             for (size_t j = 0; j < entity_count; j++) {
@@ -1200,15 +1208,67 @@ int main(void) {
                     float speed_along_normal =
                       glm_vec3_dot(rigidbody->velocity, manifold.normal);
                     if (speed_along_normal < 0.0f) {
-                      vec3 vel_along_normal;
-                      glm_vec3_scale(manifold.normal, speed_along_normal,
-                        vel_along_normal);
+                      vec3 impulse;
+                      glm_vec3_scale(manifold.normal,
+                        -speed_along_normal * rigidbody->mass,
+                        impulse);
 
-                      vec3 new_velocity;
-                      glm_vec3_sub(rigidbody->velocity, vel_along_normal,
-                        new_velocity);
+                      glm_vec3_muladds(impulse,
+                        1 / rigidbody->mass,
+                        rigidbody->velocity);
+                      DISPLAY_VEC3(rigidbody->velocity);
 
-                      glm_vec3_copy(new_velocity, rigidbody->velocity);
+                      vec3 center;
+                      glm_vec3_copy(transform->position, center);
+                      glm_vec3_muladds(
+                        a_box_collider->size, 0.5f, center
+                      );
+
+                      // angular impulse
+                      vec3 r;
+                      glm_vec3_sub(
+                        manifold.contact_point,
+                        center,
+                        r
+                      );
+
+                      DISPLAY_VEC3(r);
+                      DISPLAY_VEC3(impulse);
+
+                      vec3 angular_impulse;
+                      glm_vec3_cross(r, impulse, angular_impulse);
+
+                      DISPLAY_VEC3(angular_impulse);
+
+                      glm_vec3_muladds(angular_impulse,
+                        1 / (rigidbody->mass * 12.0f),
+                        rigidbody->angular_vel);
+
+                      if (rigidbody->torque_generator_count == 0) {
+                        (void)realloc(rigidbody->torque_generators,
+                          sizeof(struct TorqueGenerator) * 1);
+
+                        rigidbody->torque_generators[0] =
+                          BASIC_TORQUE_GENERATOR;
+
+                        rigidbody->torque_generators[0].generator_data = malloc(
+                          sizeof(struct BasicTorqueGeneratorData));
+
+                        memcpy(rigidbody->torque_generators[0].generator_data,
+                          &(struct BasicTorqueGeneratorData){
+                            .contact_point = malloc(sizeof(vec3)),
+                            .force = malloc(sizeof(vec3)),
+                          }, sizeof(struct BasicTorqueGeneratorData));
+
+                        struct BasicTorqueGeneratorData* tg_data =
+                          rigidbody->torque_generators[0].generator_data;
+
+                        glm_vec3_copy(manifold.contact_point, *tg_data->contact_point);
+
+                        glm_vec3_copy((float*)GRAVITY_VEC, *tg_data->force);
+
+                        rigidbody->torque_generator_count = 1;
+                      }
                     }
                   }
                 }
