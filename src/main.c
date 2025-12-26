@@ -21,8 +21,11 @@
 
 #define DEBUG
 #define SHOW_COLLIDERS
+#define SHOW_COLLIDERS_CENTER
 
 #define FRAME_RATE 60.0f
+
+#define DEFAULT_RENDER_MODE GL_LINE
 
 //  TODO: Load from config file
 #define TITLE "Fable Engine"
@@ -326,11 +329,15 @@ void integrate_entity(
 
   glm_vec3_zero(rb->force_acc);
 
-  printf("Hi\n");
   glm_vec3_muladds(rb->angular_vel, duration, transform->rotation);
 
   vec3 resulting_angular_acc;
   glm_vec3_copy(rb->angular_acc, resulting_angular_acc);
+
+  DISPLAY_VEC3(rb->torque_acc);
+#ifdef DEBUG
+  // glm_vec3_copy((vec3){0.0, 0.0, 1.0}, rb->torque_acc);
+#endif
 
   glm_vec3_muladds(rb->torque_acc, 1 / rb->mass, resulting_angular_acc);
   glm_vec3_muladds(resulting_angular_acc, duration, rb->angular_vel);
@@ -1086,6 +1093,7 @@ int main(void) {
         }
 
         glBindVertexArray(mesh_filter->vao);
+        glPolygonMode(GL_FRONT_AND_BACK, DEFAULT_RENDER_MODE);
         glDrawArrays(GL_TRIANGLES, 0,
           mesh_filter->vertex_count);
 
@@ -1097,14 +1105,30 @@ int main(void) {
         if (box_collider_comp != NULL) {
           glUseProgram(collider_program);
 
-          vec3 points[8];
+
+#ifdef SHOW_COLLIDERS_CENTER
+          int num_points = 9;
+#else
+          int num_points = 8;
+#endif
+          vec3 points[num_points];
           get_collider_obb(
             box_collider_comp->data.box_collider,
             transform,
             points
           );
 
+#ifdef SHOW_COLLIDERS_CENTER
+          vec3 center;
+          glm_vec3_zero(center);
           for (int i = 0; i < 8; i++) {
+            glm_vec3_add(center, points[i], center);
+          }
+          glm_vec3_scale(center, 1.0f / 8.0f, center);
+          glm_vec3_copy(center, points[8]);
+#endif
+
+          for (int i = 0; i < num_points; i++) {
             mat4 point_model;
             glm_mat4_identity(point_model);
             glm_translate(point_model, points[i]);
@@ -1122,6 +1146,16 @@ int main(void) {
               glGetUniformLocation(collider_program, "view");
             glUniformMatrix4fv(view_loc, 1,
               GL_FALSE, (float *)view_matrix);
+
+            GLuint color_loc =
+              glGetUniformLocation(collider_program, "color");
+            if (i < 8) {
+              glUniform3fv(color_loc, 1,
+                (vec3){0.0f, 1.0f, 0.0f});
+            } else {
+              glUniform3fv(color_loc, 1,
+                (vec3){0.0f, 0.0f, 1.0f});
+            }
 
             glBindVertexArray(CUBE_VAO);
             glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
@@ -1219,16 +1253,24 @@ int main(void) {
                       DISPLAY_VEC3(rigidbody->velocity);
 
                       vec3 center;
-                      glm_vec3_copy(transform->position, center);
-                      glm_vec3_muladds(
-                        a_box_collider->size, 0.5f, center
+                      glm_vec3_zero(center);
+
+                      vec3 points[8];
+                      get_collider_obb(
+                        a_box_collider,
+                        transform,
+                        points
                       );
 
-                      // angular impulse
+                      for (int i = 0; i < 8; i++) {
+                        glm_vec3_add(center, points[i], center);
+                      }
+                      glm_vec3_scale(center, 1.0f / 8.0f, center);
+
                       vec3 r;
                       glm_vec3_sub(
-                        manifold.contact_point,
                         center,
+                        manifold.contact_point,
                         r
                       );
 
@@ -1236,13 +1278,65 @@ int main(void) {
                       DISPLAY_VEC3(impulse);
 
                       vec3 angular_impulse;
+                      // glm_vec3_cross(r, impulse, angular_impulse);
                       glm_vec3_cross(r, impulse, angular_impulse);
 
                       DISPLAY_VEC3(angular_impulse);
+                      // angular_impulse[2] = -angular_impulse[2];
 
                       glm_vec3_muladds(angular_impulse,
-                        1 / (rigidbody->mass * 12.0f),
+                        1 / rigidbody->mass,
                         rigidbody->angular_vel);
+
+                      // draw line from contact point in direction of r
+                      GLuint vao, vbo;
+                      glGenVertexArrays(1, &vao);
+                      glGenBuffers(1, &vbo);
+
+                      vec3 line_points[2];
+                      glm_vec3_copy(manifold.contact_point, line_points[1]);
+                      glm_vec3_add(
+                        manifold.contact_point,
+                        r,
+                        line_points[0]
+                      );
+
+                      glBindVertexArray(vao);
+                      glBindBuffer(GL_ARRAY_BUFFER, vbo);
+                      glBufferData(GL_ARRAY_BUFFER,
+                        sizeof(line_points),
+                        line_points,
+                        GL_STATIC_DRAW);
+
+                      glEnableVertexAttribArray(0);
+                      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE,
+                        3 * sizeof(float), (void*)0);
+
+                      glUseProgram(collider_program);
+                      GLuint model_loc =
+                        glGetUniformLocation(collider_program, "model");
+                      mat4 identity;
+                      glm_mat4_identity(identity);
+                      glUniformMatrix4fv(model_loc, 1,
+                        GL_FALSE, (float *)identity);
+                      GLuint proj_loc =
+                        glGetUniformLocation(collider_program, "projection");
+                      glUniformMatrix4fv(proj_loc, 1,
+                        GL_FALSE, (float *)projection);
+                      GLuint view_loc =
+                        glGetUniformLocation(collider_program, "view");
+                      glUniformMatrix4fv(view_loc, 1,
+                        GL_FALSE, (float *)view_matrix);
+                      GLuint color_loc =
+                        glGetUniformLocation(collider_program, "color");
+                      glUniform3fv(color_loc, 1,
+                        (vec3){1.0f, 1.0f, 1.0f});
+                      glBindVertexArray(vao);
+                      glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+                      glDrawArrays(GL_LINES, 0, 2);
+                      glDeleteVertexArrays(1, &vao);
+                      glDeleteBuffers(1, &vbo);
+                      glPolygonMode(GL_FRONT_AND_BACK, DEFAULT_RENDER_MODE);
 
                       if (rigidbody->torque_generator_count == 0) {
                         (void)realloc(rigidbody->torque_generators,
@@ -1256,18 +1350,25 @@ int main(void) {
 
                         memcpy(rigidbody->torque_generators[0].generator_data,
                           &(struct BasicTorqueGeneratorData){
-                            .contact_point = malloc(sizeof(vec3)),
+                            .r = malloc(sizeof(vec3)),
                             .force = malloc(sizeof(vec3)),
                           }, sizeof(struct BasicTorqueGeneratorData));
 
                         struct BasicTorqueGeneratorData* tg_data =
                           rigidbody->torque_generators[0].generator_data;
 
-                        glm_vec3_copy(manifold.contact_point, *tg_data->contact_point);
+                        glm_vec3_copy(r, *tg_data->r);
 
                         glm_vec3_copy((float*)GRAVITY_VEC, *tg_data->force);
 
                         rigidbody->torque_generator_count = 1;
+                      } else {
+                        struct BasicTorqueGeneratorData* tg_data =
+                          rigidbody->torque_generators[0].generator_data;
+
+                        glm_vec3_copy(r, *tg_data->r);
+
+                        glm_vec3_copy((float*)GRAVITY_VEC, *tg_data->force);
                       }
                     }
                   }

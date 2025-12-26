@@ -257,7 +257,7 @@ struct TorqueGenerator {
 };
 
 struct BasicTorqueGeneratorData {
-  vec3* contact_point;
+  vec3* r;
   vec3* force;
 };
 
@@ -292,14 +292,16 @@ void _basic_torque_generator_update_torque(
   struct BasicTorqueGeneratorData* data =
     (struct BasicTorqueGeneratorData*)generator_data;
 
-  if (data->contact_point == NULL || data->force == NULL)
+  if (data->r == NULL || data->force == NULL)
     return;
 
-  vec3 r;
-  glm_vec3_sub(*(data->contact_point), rigidbody->velocity, r);
+  DISPLAY_VEC3(*(data->r));
+
+  // vec3 r;
+  // glm_vec3_sub(*(data->contact_point), rigidbody->velocity, r);
 
   vec3 torque;
-  glm_vec3_cross(r, *(data->force), torque);
+  glm_vec3_cross(*(data->r), *(data->force), torque);
 
   glm_vec3_add(rigidbody->torque_acc, torque, rigidbody->torque_acc);
 }
